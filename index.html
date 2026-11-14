@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Regards Private Limited · Order online</title>
+  <meta name="description" content="Order from Regards Private Limited online. We call to confirm, then you pay securely by EcoCash, InnBucks or card.">
+  <meta name="theme-color" content="#0B1446">
+
+  <!-- The card a link shows on WhatsApp, Facebook and Instagram. -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Regards Private Limited · Order online">
+  <meta property="og:description" content="Order from Regards Private Limited online. We call to confirm, then you pay securely by EcoCash, InnBucks or card.">
+  <meta property="og:image" content="https://skiff1.github.io/shop/share.png">
+  <meta property="og:url" content="https://skiff1.github.io/shop/">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <link rel="icon" href="icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="shop.css">
+</head>
+<body>
+  <header class="bar" id="top">
+    <a class="brand" href="#top" aria-label="Back to the top">
+      <img class="brand-logo" id="logo" alt="" hidden>
+      <span class="brand-name" id="brand-name">Regards Private Limited</span>
+    </a>
+    <button class="basket-button" id="open-basket" type="button" aria-label="Open your basket">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 3.5h2.6l2.3 11.2a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.1l1.8-7.3H6"/><circle cx="9.5" cy="19.6" r="1.4"/><circle cx="17" cy="19.6" r="1.4"/></svg>
+      <span class="basket-count" id="basket-count" hidden>0</span>
+    </button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow" id="branch-name">Order online</p>
+      <h1 id="shop-name">Regards Private Limited</h1>
+      <p class="tagline" id="tagline"></p>
+      <ul class="promises">
+        <li><span aria-hidden="true">✓</span> We call to confirm</li>
+        <li><span aria-hidden="true">✓</span> Pay securely by EcoCash, InnBucks or card</li>
+        <li><span aria-hidden="true">✓</span> Collect or have it delivered</li>
+      </ul>
+    </section>
+
+    <section class="catalogue" aria-labelledby="catalogue-title">
+      <div class="catalogue-head">
+        <h2 id="catalogue-title">Shop</h2>
+        <label class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input id="search" type="search" placeholder="Search products" autocomplete="off" aria-label="Search products">
+        </label>
+      </div>
+      <div class="grid" id="grid" aria-live="polite">
+        <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+      </div>
+      <p class="empty" id="empty" hidden></p>
+    </section>
+  </main>
+
+  <footer class="footer" id="footer">
+    <div class="footer-inner">
+      <div>
+        <p class="footer-name" id="footer-name">Regards Private Limited</p>
+        <p class="footer-address" id="footer-address"></p>
+      </div>
+      <div class="footer-actions" id="footer-actions"></div>
+    </div>
+    <p class="powered">Powered by Regards Private Limited</p>
+  </footer>
+
+  <!-- The basket, sliding up from the bottom. -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="sheet" id="sheet" aria-labelledby="sheet-title" aria-modal="true" role="dialog" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="sheet-title">Your basket</h2>
+      <button class="close" id="close-basket" type="button" aria-label="Close">×</button>
+    </div>
+
+    <div id="basket-view">
+      <ul class="lines" id="lines"></ul>
+      <p class="basket-empty" id="basket-empty">Your basket is empty. Add something you like.</p>
+      <div class="total-row" id="total-row"><span>Total</span><strong id="total">0.00</strong></div>
+
+      <form class="checkout" id="checkout" novalidate>
+        <h3>Your details</h3>
+        <label>Name<input name="name" autocomplete="name" required maxlength="80"></label>
+        <label>Phone number<input name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="077 123 4567"></label>
+        <label>Email <span class="optional">(optional)</span><input name="email" type="email" autocomplete="email" maxlength="120"></label>
+        <fieldset class="choice">
+          <legend>How would you like it?</legend>
+          <label><input type="radio" name="how" value="collect" checked> Collect</label>
+          <label><input type="radio" name="how" value="deliver"> Deliver</label>
+        </fieldset>
+        <label id="address-field" hidden>Delivery address<textarea name="address" rows="2" maxlength="200" autocomplete="street-address"></textarea></label>
+        <label>Anything we should know? <span class="optional">(optional)</span><textarea name="note" rows="2" maxlength="300"></textarea></label>
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <button class="primary" id="place" type="submit">Place order</button>
+        <p class="fine">No payment now. We'll call you to confirm, then send a secure Paynow link.</p>
+      </form>
+    </div>
+
+    <div class="done" id="done" hidden>
+      <div class="done-mark" aria-hidden="true">✓</div>
+      <h3>Thank you!</h3>
+      <p id="done-text"></p>
+      <button class="primary" id="done-close" type="button">Keep shopping</button>
+    </div>
+  </aside>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="config.js"></script>
+  <script src="shop.js"></script>
+</body>
+</html>
