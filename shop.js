@@ -6,12 +6,17 @@
 
   const config = window.SHOP_CONFIG || {};
   const params = new URLSearchParams(location.search);
+  // A branch's own page with ?b=BR-01; without one, every online branch on
+  // one page, each product once.
   const branch = (params.get("b") || config.defaultBranch || "").toUpperCase();
+  const everyBranch = !branch;
+  let branches = []; // every online branch, on the all-branches page
   const $ = (id) => document.getElementById(id);
   const money = (n) => (config.currency || "$") + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const basketKey = "rpl-basket-" + branch;
+  const basketKey = "rpl-basket-" + (branch || "all");
 
   let products = [];
+  let whatsapp = ""; // the shop's number, for asking about a product coming soon
   let basket = loadBasket();
   const photos = new Map(); // photo id -> object URL, fetched once
 
@@ -75,7 +80,9 @@
     const name = company.name || shop.branch.name;
     document.title = name + " · Order online";
     for (const id of ["brand-name", "shop-name", "footer-name"]) $(id).textContent = name;
-    $("branch-name").textContent = shop.branch.name ? shop.branch.name + " · Order online" : "Order online";
+    branches = shop.branches || [];
+    $("branch-name").textContent = shop.branch.name ? shop.branch.name + " · Order online"
+      : branches.length > 1 ? "Order online · " + branches.length + " shops" : "Order online";
     $("tagline").textContent = company.tagline || "";
     if (company.logo) {
       $("logo").src = "data:image/png;base64," + company.logo;
@@ -88,10 +95,35 @@
     if (phone) {
       const digits = phone.replace(/[^\d+]/g, "");
       const wa = digits.startsWith("+") ? digits.slice(1) : digits.startsWith("0") ? "263" + digits.slice(1) : digits;
+      whatsapp = wa;
       actions.append(link("https://wa.me/" + wa, "WhatsApp us", "chip-link whatsapp"), link("tel:" + digits, "Call " + phone, "chip-link"));
     }
     const email = (company.email || "").split(/[,;/\n]/)[0].trim();
     if (email) actions.append(link("mailto:" + email, email, "chip-link"));
+
+    // The contact band: the same ways to reach the shop, larger.
+    const contact = $("contact-actions");
+    contact.textContent = "";
+    for (const a of actions.querySelectorAll("a")) contact.append(a.cloneNode(true));
+
+    // About us: the shop's own words, a paragraph each, and its shops.
+    $("about-title").textContent = name;
+    const about = $("about-text");
+    about.textContent = "";
+    for (const para of String(config.about || "").split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)) {
+      const el = document.createElement("p");
+      el.textContent = para;
+      about.append(el);
+    }
+    const shops = (shop.branches && shop.branches.length ? shop.branches : (shop.branch && shop.branch.name ? [shop.branch] : []));
+    const list = $("shop-list");
+    list.textContent = "";
+    shops.forEach((b) => {
+      const li = document.createElement("li");
+      li.textContent = b.name;
+      list.append(li);
+    });
+    $("shops").hidden = shops.length === 0;
   }
 
   function link(href, text, cls) {
@@ -110,8 +142,8 @@
     $("empty").textContent = products.length ? "Nothing matches “" + $("search").value + "”." : "No products online yet. Please check back soon.";
     shown.forEach((p, index) => {
       const card = document.createElement("article");
-      card.className = "product" + (p.in_stock ? "" : " out");
-      card.style.animationDelay = Math.min(index * 30, 300) + "ms";
+      card.className = "product reveal" + (p.in_stock ? "" : p.coming_soon ? " soon" : " out");
+      card.style.transitionDelay = (index % 4) * 70 + "ms";
 
       const photo = document.createElement("div");
       photo.className = "photo";
@@ -129,7 +161,8 @@
       }
       if (!p.in_stock) {
         const tag = document.createElement("span");
-        tag.className = "sold-out-tag"; tag.textContent = "Sold out";
+        tag.className = p.coming_soon ? "soon-tag" : "sold-out-tag";
+        tag.textContent = p.coming_soon ? "Coming soon" : "Sold out";
         photo.append(tag);
       }
 
@@ -137,24 +170,61 @@
       body.className = "product-body";
       const name = document.createElement("h3");
       name.className = "product-name"; name.textContent = p.name;
+      const expected = document.createElement("p");
+      expected.className = "expected";
+      expected.textContent = p.coming_soon && p.expected ? "Expected " + p.expected : "";
       const foot = document.createElement("div");
       foot.className = "product-foot";
       const price = document.createElement("span");
       price.className = "price"; price.textContent = money(p.price);
-      const add = document.createElement("button");
-      add.type = "button";
-      const inBasket = basket[p.id] || 0;
-      add.className = "add" + (inBasket ? " in" : "");
-      add.textContent = !p.in_stock ? "Sold out" : inBasket ? inBasket + " in basket" : "Add";
-      add.disabled = !p.in_stock;
-      add.setAttribute("aria-label", p.in_stock ? "Add " + p.name + " to your basket" : p.name + " is sold out");
-      add.onclick = () => { setQty(p.id, (basket[p.id] || 0) + 1); toast("Added " + p.name); bump(); };
+      let add;
+      if (p.coming_soon) {
+        // Not in stock yet: ask about it rather than order it.
+        add = document.createElement("a");
+        add.className = "add ask";
+        add.textContent = "Ask on WhatsApp";
+        add.target = "_blank"; add.rel = "noopener";
+        add.href = whatsapp ? "https://wa.me/" + whatsapp + "?text=" + encodeURIComponent(
+          "Hi, I'm interested in " + p.name + " (coming soon on your online shop). When will it be in?") : "#";
+        add.setAttribute("aria-label", "Ask about " + p.name + " on WhatsApp");
+      } else {
+        add = document.createElement("button");
+        add.type = "button";
+        const inBasket = basket[p.id] || 0;
+        add.className = "add" + (inBasket ? " in" : "");
+        add.textContent = !p.in_stock ? "Sold out" : inBasket ? inBasket + " in basket" : "Add";
+        add.disabled = !p.in_stock;
+        add.setAttribute("aria-label", p.in_stock ? "Add " + p.name + " to your basket" : p.name + " is sold out");
+        add.onclick = () => { setQty(p.id, (basket[p.id] || 0) + 1); toast("Added " + p.name); bump(); };
+      }
       foot.append(price, add);
-      body.append(name, foot);
+      body.append(name);
+      if (expected.textContent) body.append(expected);
+      body.append(foot);
       card.append(photo, body);
       grid.append(card);
     });
+    watchReveals();
   }
+
+  // Things fade up into place as they scroll into view, once each.
+  const revealer = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("shown");
+        revealer.unobserve(entry.target);
+      }
+    }
+  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 }) : null;
+
+  function watchReveals() {
+    for (const el of document.querySelectorAll(".reveal:not(.shown)")) {
+      if (revealer) revealer.observe(el); else el.classList.add("shown");
+    }
+  }
+
+  // The bar darkens a touch once the page is scrolled.
+  window.addEventListener("scroll", () => document.body.classList.toggle("scrolled", window.scrollY > 24), { passive: true });
 
   function renderBasket() {
     // Products no longer sold (or not in this shop) leave the basket.
@@ -195,6 +265,26 @@
     $("total-row").hidden = n === 0;
     $("checkout").hidden = n === 0;
     $("total").textContent = money(total());
+    renderCollect();
+  }
+
+  // Collecting, on the all-branches page: only the shops that have every
+  // item in the basket. Delivering, the shop picks one that has.
+  function renderCollect() {
+    const field = $("collect-field"), note = $("collect-note"), select = $("collect");
+    const collecting = (document.querySelector('input[name="how"]:checked') || {}).value !== "deliver";
+    if (!everyBranch) { field.hidden = true; note.hidden = true; return; }
+    const ids = Object.keys(basket);
+    const able = branches.filter((b) => ids.every((id) => {
+      const p = products.find((x) => x.id === id);
+      return p && (p.at || []).includes(b.code);
+    }));
+    const chosen = select.value;
+    select.textContent = "";
+    able.forEach((b) => select.append(new Option(b.name, b.code, false, b.code === chosen)));
+    field.hidden = !collecting || able.length === 0;
+    note.hidden = !collecting || able.length > 0 || ids.length === 0;
+    note.textContent = "No one shop has all of these right now. Choose Deliver, or order them separately.";
   }
 
   function bump() {
@@ -239,13 +329,16 @@
     if ((data.get("name") || "").trim().length < 2) return fail("Please give your name.");
     if ((data.get("phone") || "").replace(/\D/g, "").length < 9) return fail("Please give a phone number we can call you on.");
     if (deliver && !(data.get("address") || "").trim()) return fail("Please give the delivery address.");
+    if (everyBranch && !deliver && !data.get("collect")) return fail("Choose Deliver: no one shop has all of these to collect.");
 
     const button = $("place");
     button.disabled = true;
     button.textContent = "Placing your order…";
     try {
       const made = await rpc("rpl_web_order", {
-        p_branch: branch,
+        // Collecting: from the shop chosen. Delivering from the all-branches
+        // page: left to the shop, which picks one that has everything.
+        p_branch: everyBranch ? (deliver ? "" : data.get("collect")) : branch,
         p_name: data.get("name"),
         p_phone: data.get("phone"),
         p_email: data.get("email") || "",
@@ -259,7 +352,8 @@
       $("address-field").hidden = true;
       $("basket-view").hidden = true;
       $("done").hidden = false;
-      $("done-text").textContent = "Your order " + made.number + " (" + money(made.total) + ") is in. " +
+      $("done-text").textContent = "Your order " + made.number + " (" + money(made.total) + ")" +
+        (made.branch && everyBranch ? " is with our " + made.branch + " shop. " : " is in. ") +
         "We'll call you shortly to confirm, then send a secure Paynow link to pay.";
       renderBasket();
       renderGrid();
@@ -275,14 +369,14 @@
   // --- Start ---
 
   async function load() {
-    if (!branch || !config.supabaseUrl) {
+    if (!config.supabaseUrl) {
       $("grid").textContent = "";
       $("empty").hidden = false;
       $("empty").textContent = "This shop link is missing its branch. Please use the link the shop shared.";
       return;
     }
     try {
-      const shop = await rpc("rpl_web_shop", { p_branch: branch });
+      const shop = await rpc("rpl_web_shop", { p_branch: branch || "" });
       products = shop.products || [];
       renderShop(shop);
       renderGrid();
@@ -302,7 +396,9 @@
   $("search").addEventListener("input", renderGrid);
   $("checkout").addEventListener("submit", placeOrder);
   for (const radio of document.querySelectorAll('input[name="how"]')) {
-    radio.addEventListener("change", () => { $("address-field").hidden = radio.value !== "deliver" || !radio.checked; });
+    radio.addEventListener("change", () => { $("address-field").hidden = radio.value !== "deliver" || !radio.checked; renderCollect(); });
   }
+  watchReveals();
+  requestAnimationFrame(() => document.body.classList.add("ready")); // the hero rises in
   load();
 })();
