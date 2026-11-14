@@ -370,3 +370,33 @@ body.ready .rise:nth-child(5) { transition-delay: .32s; }
   .aurora span { animation: none !important; }
   .rise, .reveal { opacity: 1 !important; transform: none !important; }
 }
+
+/* ====================================================================
+   Tablets: one margin for every section, so their left edges line up and
+   the page breathes between phone and laptop widths.
+   ==================================================================== */
+:root { --gutter: clamp(16px, 4.5vw, 44px); --page: 1020px; }
+.bar { padding-left: max(var(--gutter), env(safe-area-inset-left)); padding-right: max(var(--gutter), env(safe-area-inset-right)); }
+.hero-inner { padding-left: max(var(--gutter), calc((100% - var(--page)) / 2)); padding-right: max(var(--gutter), calc((100% - var(--page)) / 2)); }
+.catalogue { max-width: none; padding-left: max(var(--gutter), calc((100% - var(--page)) / 2)); padding-right: max(var(--gutter), calc((100% - var(--page)) / 2)); }
+.about { padding: 40px max(var(--gutter), calc((100% - var(--page)) / 2)) 64px; }
+.about-inner, .contact-inner, .footer-inner, .powered { max-width: var(--page); }
+.contact { padding-left: var(--gutter); padding-right: var(--gutter); }
+.footer { padding-left: var(--gutter); padding-right: var(--gutter); }
+.catalogue { padding-bottom: 40px; }
+@media (min-width: 680px) and (max-width: 1100px) {
+  .grid { gap: 20px; }
+  .hero h1 { font-size: clamp(40px, 6.4vw, 60px); }
+  .about-inner { grid-template-columns: 1fr; }
+  .values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Touch screens: no fixed background (iPads stretch or jump it), and the
+   hover lifts and zooms only where there's a mouse, or they stick on a tap. */
+@media (hover: none) {
+  body { background-attachment: scroll; }
+  body::before { position: absolute; }
+  .product:hover, .product.reveal.shown:hover { transform: none; }
+  .product:hover .photo img, .product:hover .placeholder { transform: none; }
+  .cta:hover, .contact-actions .chip-link:hover { transform: none; }
+}
