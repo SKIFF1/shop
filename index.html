@@ -6,6 +6,10 @@
   <title>Regards Private Limited · Order online</title>
   <meta name="description" content="Genuine electronics accessories, delivered in Harare and beyond!">
   <meta name="theme-color" content="#0B1446">
+  <!-- Only this page's own code runs, and it talks only to the shop's cloud:
+       anything injected into the page could neither run nor send data away. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src https://vazynemwwncqgcgcffbn.supabase.co; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
 
   <!-- The card a link shows on WhatsApp, Facebook and Instagram. -->
   <meta property="og:type" content="website">
