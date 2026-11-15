@@ -224,7 +224,8 @@
       const foot = document.createElement("div");
       foot.className = "product-foot";
       const price = document.createElement("span");
-      price.className = "price"; price.textContent = money(p.price);
+      // On a purchase order with no product made yet: no price set to show.
+      price.className = "price"; price.textContent = p.price == null ? "Price to follow" : money(p.price);
       let add;
       if (p.coming_soon) {
         // Not in stock yet: ask about it rather than order it.
