@@ -16,6 +16,52 @@
   const basketKey = "rpl-basket-" + (branch || "all");
 
   let products = [];
+
+  // --- How the page is used: anonymous counts for the shop's own report ---
+  // A random id per browser visit (gone when the tab closes), the kind of
+  // device, and where the visitor came from. No name, no address, nothing
+  // that says who: the page can't know, and doesn't try.
+  const visitId = (() => {
+    try {
+      let id = sessionStorage.getItem("rpl-visit");
+      if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)); sessionStorage.setItem("rpl-visit", id); }
+      return id;
+    } catch (e) { return String(Math.random()).slice(2); }
+  })();
+  const source = (() => {
+    const tag = (params.get("utm_source") || params.get("ref") || "").toLowerCase();
+    const from = tag || (document.referrer ? new URL(document.referrer).hostname.toLowerCase() : "");
+    if (!from) return "direct";
+    for (const [name, marks] of [["whatsapp", ["whatsapp", "wa.me"]], ["facebook", ["facebook", "fb.", "fb"]],
+      ["instagram", ["instagram"]], ["google", ["google"]], ["tiktok", ["tiktok"]]]) {
+      if (marks.some((m) => from.includes(m))) return name;
+    }
+    return from.includes("skiff1.github.io") ? "direct" : "other";
+  })();
+  const device = (() => {
+    const w = Math.min(screen.width || innerWidth, innerWidth || screen.width);
+    const touch = matchMedia("(pointer: coarse)").matches;
+    return w < 600 ? "phone" : touch && w < 1100 ? "tablet" : "computer";
+  })();
+  const events = [];
+  const seen = new Set();
+  function track(event, product) {
+    if (event === "view") { if (seen.has(product)) return; seen.add(product); }
+    events.push({ visit: visitId, event, product: product || "", source, device, branch });
+  }
+  function sendEvents(leaving) {
+    if (!events.length || !config.supabaseUrl) return;
+    const batch = events.splice(0, 25);
+    fetch(config.supabaseUrl.replace(/\/$/, "") + "/rest/v1/rpc/rpl_web_track", {
+      method: "POST", keepalive: !!leaving,
+      headers: { "Content-Type": "application/json", apikey: config.publishableKey, Authorization: "Bearer " + config.publishableKey },
+      body: JSON.stringify({ p_events: batch }),
+    }).catch(() => {});
+  }
+  setInterval(() => sendEvents(false), 5000);
+  addEventListener("pagehide", () => sendEvents(true));
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") sendEvents(true); });
+  track("visit");
   let whatsapp = ""; // the shop's number, for asking about a product coming soon
   let basket = loadBasket();
   const photos = new Map(); // photo id -> object URL, fetched once
@@ -110,7 +156,8 @@
     $("about-title").textContent = name;
     const about = $("about-text");
     about.textContent = "";
-    for (const para of String(config.about || "").split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)) {
+    // The shop's own words from its settings (the cloud); the page's built-in text until set.
+    for (const para of String(company.about || config.about || "").split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean)) {
       const el = document.createElement("p");
       el.textContent = para;
       about.append(el);
@@ -143,6 +190,7 @@
     shown.forEach((p, index) => {
       const card = document.createElement("article");
       card.className = "product reveal" + (p.in_stock ? "" : p.coming_soon ? " soon" : " out");
+      card.dataset.product = p.name;
       card.style.transitionDelay = (index % 4) * 70 + "ms";
 
       const photo = document.createElement("div");
@@ -195,7 +243,7 @@
         add.textContent = !p.in_stock ? "Sold out" : inBasket ? inBasket + " in basket" : "Add";
         add.disabled = !p.in_stock;
         add.setAttribute("aria-label", p.in_stock ? "Add " + p.name + " to your basket" : p.name + " is sold out");
-        add.onclick = () => { setQty(p.id, (basket[p.id] || 0) + 1); toast("Added " + p.name); bump(); };
+        add.onclick = () => { setQty(p.id, (basket[p.id] || 0) + 1); toast("Added " + p.name); bump(); track("add", p.name); };
       }
       foot.append(price, add);
       body.append(name);
@@ -212,6 +260,7 @@
     for (const entry of entries) {
       if (entry.isIntersecting) {
         entry.target.classList.add("shown");
+        if (entry.target.dataset.product) track("view", entry.target.dataset.product);
         revealer.unobserve(entry.target);
       }
     }
@@ -346,6 +395,11 @@
         p_note: data.get("note") || "",
         p_lines: Object.entries(basket).map(([id, qty]) => ({ id, qty })),
       });
+      for (const id of Object.keys(basket)) {
+        const ordered = products.find((x) => x.id === id);
+        if (ordered) track("order", ordered.name);
+      }
+      sendEvents(false);
       basket = {};
       saveBasket();
       form.reset();
