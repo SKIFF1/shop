@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src https://vazynemwwncqgcgcffbn.supabase.co; manifest-src 'self'; worker-src 'self'">
+<title>Regards Private Limited · Staff</title>
+<meta name="theme-color" content="#0B1446">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RPL Staff">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <header class="top">
+    <div class="brand"><span class="mark">R</span><span id="title">Regards Private Limited</span></div>
+    <select id="branch" aria-label="Branch" hidden></select>
+    <button id="signout" class="ghost" hidden>Sign out</button>
+  </header>
+  <main id="view"></main>
+  <nav id="tabs" class="tabs" hidden></nav>
+</div>
+<div id="toast" role="status" hidden></div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

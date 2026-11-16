@@ -32,6 +32,7 @@
     const tag = (params.get("utm_source") || params.get("ref") || "").toLowerCase();
     const from = tag || (document.referrer ? new URL(document.referrer).hostname.toLowerCase() : "");
     if (!from) return "direct";
+    if (tag === "qr") return "qr";  // a printed QR code: ?utm_source=qr
     for (const [name, marks] of [["whatsapp", ["whatsapp", "wa.me"]], ["facebook", ["facebook", "fb.", "fb"]],
       ["instagram", ["instagram"]], ["google", ["google"]], ["tiktok", ["tiktok"]]]) {
       if (marks.some((m) => from.includes(m))) return name;
