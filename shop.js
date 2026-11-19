@@ -37,7 +37,7 @@
       ["instagram", ["instagram"]], ["google", ["google"]], ["tiktok", ["tiktok"]]]) {
       if (marks.some((m) => from.includes(m))) return name;
     }
-    return from.includes("skiff1.github.io") ? "direct" : "other";
+    return from === location.hostname.toLowerCase() ? "direct" : "other";  // moving within the shop's own site
   })();
   const device = (() => {
     const w = Math.min(screen.width || innerWidth, innerWidth || screen.width);
