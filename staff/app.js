@@ -76,6 +76,15 @@
   let branch = store("rpl-staff-branch");
   const device = store("rpl-staff-device") || (() => { const d = "iPhone web " + uuid().slice(0, 8); store("rpl-staff-device", d); return d; })();
   const isAdmin = () => session && session.role === "admin";
+  // What this person may do: their own set when one is saved on a PC
+  // (Branches & Users → Permissions…), else their role's. The shop checks
+  // again on every call; this only keeps away what they can't use.
+  function can(key) {
+    if (!session) return false;
+    if (Array.isArray(session.permissions)) return session.permissions.includes(key);
+    if (session.role === "admin") return true;
+    return session.role === "sales_person" && ["take_payments", "give_discounts", "screen:Sales Order", "screen:Web Orders"].includes(key);
+  }
   const cart = { lines: [], customer: { name: "", phone: "", email: "", address: "" }, delivery: 0, discount: 0, request: null };
 
   function signOut(why) {
@@ -86,10 +95,10 @@
 
   // --- screens ---
   const TABS = [
-    ["sell", "🛒", "Sell", () => true],
-    ["orders", "📋", "Orders", () => true],
-    ["web", "🌐", "Web orders", () => true],
-    ["reports", "📊", "Reports", isAdmin],
+    ["sell", "🛒", "Sell", () => can("screen:Sales Order")],
+    ["orders", "📋", "Orders", () => can("screen:Sales Order")],
+    ["web", "🌐", "Web orders", () => can("screen:Web Orders")],
+    ["reports", "📊", "Reports", () => can("screen:Reports")],
     ["photos", "📷", "Photos", isAdmin],
     ["more", "⚙️", "More", () => true],
   ];
@@ -133,11 +142,12 @@
         try {
           const r = await api("rpl_mobile_login", { p_username: user.value.trim(), p_pin: pin.value, p_device: device });
           if (r && r.error) throw new ApiError(r.error);
-          session = { token: r.token, username: r.username, role: r.role, ultra: !!r.ultra, home: r.branch_code, branches: r.branches || [] };
+          session = { token: r.token, username: r.username, role: r.role, ultra: !!r.ultra, home: r.branch_code, branches: r.branches || [],
+            permissions: Array.isArray(r.permissions) ? r.permissions : null };
           store("rpl-staff-session", session);
           branch = session.branches.some((b) => b.code === branch) ? branch : session.home;
           store("rpl-staff-branch", branch);
-          render("sell");
+          render(TABS.find(([, , , ok]) => ok())[0]);
         } catch (e) { err.textContent = e.message; go.disabled = false; }
       }
       pin.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
@@ -198,7 +208,7 @@
           h("label", {}, "Delivery fee"), delivery,
           h("div", { class: "total" }, h("span", {}, "Total"), totalEl),
           h("div", { class: "stack" },
-            h("button", { class: "gold full", onclick: () => place("charge") }, "Charge now"),
+            can("take_payments") ? h("button", { class: "gold full", onclick: () => place("charge") }, "Charge now") : null,
             h("button", { class: "primary full", onclick: () => place("order") }, "Create order, pay later"),
             h("button", { class: "full", onclick: () => place("quote") }, "Save as quote"),
             h("button", { class: "full danger", onclick: () => { cart.lines = []; cart.request = null; showBasket(); } }, "Clear")));
@@ -371,7 +381,7 @@
       h("div", { class: "total" }, h("span", {}, "Total"), h("span", {}, money(o.total))),
       o.invoice_number ? h("div", { class: "muted" }, "Invoice " + o.invoice_number) : null);
     const buttons = h("div", { class: "row" });
-    if (o.status !== "cancelled" && o.balance > 0.004) buttons.append(h("button", { class: "gold grow", onclick: () => payment(o, () => render("orders")) }, "Take payment"));
+    if (o.status !== "cancelled" && o.balance > 0.004 && can("take_payments")) buttons.append(h("button", { class: "gold grow", onclick: () => payment(o, () => render("orders")) }, "Take payment"));
     if (o.invoice_number) buttons.append(h("button", { onclick: () => invoicePdf(o) }, "Invoice PDF"));
     if (o.status === "payment_pending" && !(o.paid > 0.004)) buttons.append(h("button", { class: "danger", onclick: async () => {
       const reason = prompt("Delete " + o.order_number + "? Say why:"); if (reason === null) return;
@@ -436,5 +446,5 @@
   $("signout").addEventListener("click", () => signOut());
   $("branch").addEventListener("change", (e) => { branch = e.target.value; store("rpl-staff-branch", branch); cart.lines = []; render(current); });
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
-  render(session ? "sell" : "login");
+  render(session ? (TABS.find(([, , , ok]) => ok()) || ["more"])[0] : "login");
 })();
