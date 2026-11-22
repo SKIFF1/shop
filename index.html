@@ -36,11 +36,16 @@
       <a href="#about">About us</a>
       <a href="#contact">Contact</a>
     </nav>
+    <button class="basket-button account-button" id="open-account" type="button" aria-label="Your account">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.2" r="3.7"/><path d="M4.6 20.2c.9-3.7 3.9-5.9 7.4-5.9s6.5 2.2 7.4 5.9"/></svg>
+    </button>
     <button class="basket-button" id="open-basket" type="button" aria-label="Open your basket">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 3.5h2.6l2.3 11.2a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.1l1.8-7.3H6"/><circle cx="9.5" cy="19.6" r="1.4"/><circle cx="17" cy="19.6" r="1.4"/></svg>
       <span class="basket-count" id="basket-count" hidden>0</span>
     </button>
   </header>
+
+  <p class="banner" id="banner" role="status" hidden></p>
 
   <main>
     <section class="hero">
@@ -182,6 +187,40 @@
       <h3>Thank you!</h3>
       <p id="done-text"></p>
       <button class="primary" id="done-close" type="button">Keep shopping</button>
+    </div>
+  </aside>
+
+  <!-- The customer's account: signed in with a link or code sent to their email. -->
+  <aside class="sheet" id="account-sheet" aria-labelledby="account-title" aria-modal="true" role="dialog" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-head">
+      <h2 id="account-title">Your account</h2>
+      <button class="close" id="close-account" type="button" aria-label="Close">×</button>
+    </div>
+
+    <form class="checkout" id="sign-in" novalidate>
+      <p class="fine">Sign in with your email to see your orders and receipts, and to have your details filled in next time. No password: we email you a code.</p>
+      <label>Email<input name="email" type="email" autocomplete="email" required maxlength="120"></label>
+      <button class="primary" id="send-code" type="submit">Email me a sign-in code</button>
+      <div id="code-step" hidden>
+        <label>The code from the email<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10"></label>
+        <button class="primary" id="verify-code" type="button">Sign in</button>
+        <p class="fine">Or tap the sign-in link in the email.</p>
+      </div>
+      <p class="form-error" id="sign-in-error" role="alert" hidden></p>
+    </form>
+
+    <div id="account-view" hidden>
+      <p class="fine">Signed in as <strong id="account-email"></strong> · <a href="#" id="sign-out">Sign out</a></p>
+      <form class="checkout" id="my-details" novalidate>
+        <h3>Your details</h3>
+        <label>Name<input name="name" autocomplete="name" maxlength="80"></label>
+        <label>Phone number<input name="phone" type="tel" inputmode="tel" autocomplete="tel"></label>
+        <label>Delivery address <span class="optional">(optional)</span><textarea name="address" rows="2" maxlength="200" autocomplete="street-address"></textarea></label>
+        <button class="primary" id="save-details" type="submit">Save</button>
+      </form>
+      <h3 class="orders-title">Your orders</h3>
+      <ul class="my-orders" id="my-orders"></ul>
     </div>
   </aside>
 

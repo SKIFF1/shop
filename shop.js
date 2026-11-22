@@ -70,9 +70,11 @@
   // --- The cloud ---
 
   async function rpc(fn, body) {
+    // Signed in: as the customer, so their orders are on their account.
+    const bearer = (await accessToken()) || config.publishableKey;
     const response = await fetch(config.supabaseUrl.replace(/\/$/, "") + "/rest/v1/rpc/" + fn, {
       method: "POST",
-      headers: { "Content-Type": "application/json", apikey: config.publishableKey, Authorization: "Bearer " + config.publishableKey },
+      headers: { "Content-Type": "application/json", apikey: config.publishableKey, Authorization: "Bearer " + bearer },
       body: JSON.stringify(body),
     });
     const data = await response.json().catch(() => ({}));
@@ -131,6 +133,9 @@
     $("branch-name").textContent = shop.branch.name ? shop.branch.name + " · Order online"
       : branches.length > 1 ? "Order online · " + branches.length + " shops" : "Order online";
     $("tagline").textContent = company.tagline || "";
+    // The shop's announcement, while it is switched on (Settings → Online shop).
+    $("banner").textContent = company.banner || "";
+    $("banner").hidden = !company.banner;
     if (company.logo) {
       $("logo").src = "data:image/png;base64," + company.logo;
       $("logo").hidden = false;
@@ -227,6 +232,12 @@
       const price = document.createElement("span");
       // On a purchase order with no product made yet: no price set to show.
       price.className = "price"; price.textContent = p.price == null ? "Price to follow" : money(p.price);
+      // A lower price online: the shop's own shown crossed out beside it.
+      if (p.was && p.price != null) {
+        const was = document.createElement("s");
+        was.className = "was"; was.textContent = money(p.was);
+        price.prepend(was, " ");
+      }
       let add;
       if (p.coming_soon) {
         // Not in stock yet: ask about it rather than order it.
@@ -251,6 +262,11 @@
       body.append(name);
       if (expected.textContent) body.append(expected);
       body.append(foot);
+      if (p.featured) {
+        const star = document.createElement("span");
+        star.className = "featured-tag"; star.textContent = "Featured";
+        photo.append(star);
+      }
       card.append(photo, body);
       grid.append(card);
     });
@@ -356,6 +372,7 @@
   // --- The basket sheet ---
 
   function openBasket() {
+    fillCheckout();
     $("basket-view").hidden = false;
     $("done").hidden = true;
     $("scrim").hidden = false;
@@ -366,6 +383,7 @@
   function closeBasket() {
     $("scrim").hidden = true;
     $("sheet").hidden = true;
+    $("account-sheet").hidden = true;
     document.body.style.overflow = "";
   }
 
@@ -420,6 +438,180 @@
       button.disabled = false;
       button.textContent = "Place order";
     }
+  }
+
+  // --- The customer's account ---
+  // Signed in by Supabase Auth with a code (or link) sent to their email; the
+  // shop's functions then know them by that email (rpl_web_me), so they see
+  // their own orders and receipts and keep their details. Kept in this browser.
+
+  const ACCOUNT_KEY = "rpl-shop-account";
+  let account = (() => { try { return JSON.parse(localStorage.getItem(ACCOUNT_KEY) || "null"); } catch (e) { return null; } })();
+  let me = null; // the account's details and orders, once loaded
+
+  async function auth(path, body, bearer) {
+    const response = await fetch(config.supabaseUrl.replace(/\/$/, "") + "/auth/v1/" + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: config.publishableKey, Authorization: "Bearer " + (bearer || config.publishableKey) },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.msg || data.error_description || data.message || "That didn't work. Please try again.");
+    return data;
+  }
+  function emailIn(jwt) {
+    try { return JSON.parse(atob(jwt.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).email || ""; } catch (e) { return ""; }
+  }
+  function keep(session) {
+    account = { access: session.access_token, refresh: session.refresh_token,
+      expires: Date.now() + (Number(session.expires_in) || 3600) * 1000,
+      email: (session.user && session.user.email) || emailIn(session.access_token) };
+    try { localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account)); } catch (e) { /* private window: this visit only */ }
+  }
+  function forgetAccount() {
+    account = null; me = null;
+    try { localStorage.removeItem(ACCOUNT_KEY); } catch (e) { /* nothing kept */ }
+  }
+  async function accessToken() {
+    if (!account) return null;
+    if (Date.now() > account.expires - 60000) {
+      try { keep(await auth("token?grant_type=refresh_token", { refresh_token: account.refresh })); }
+      catch (e) { forgetAccount(); renderAccount(); return null; }
+    }
+    return account.access;
+  }
+  // Back from the link in the email: the session is in the address.
+  function fromEmailLink() {
+    const found = new URLSearchParams(location.hash.slice(1));
+    if (found.get("access_token")) {
+      keep({ access_token: found.get("access_token"), refresh_token: found.get("refresh_token"), expires_in: found.get("expires_in") });
+      history.replaceState(null, "", location.pathname + location.search);
+      toast("You're signed in");
+      return true;
+    }
+    if (found.get("error_description")) {
+      history.replaceState(null, "", location.pathname + location.search);
+      toast(found.get("error_description"));
+    }
+    return false;
+  }
+
+  function openAccount() {
+    $("scrim").hidden = false;
+    $("account-sheet").hidden = false;
+    document.body.style.overflow = "hidden";
+    renderAccount();
+  }
+  function closeAccount() {
+    $("scrim").hidden = true;
+    $("account-sheet").hidden = true;
+    document.body.style.overflow = "";
+  }
+
+  async function renderAccount() {
+    const signedIn = Boolean(account);
+    $("sign-in").hidden = signedIn;
+    $("account-view").hidden = !signedIn;
+    if (!signedIn) return;
+    $("account-email").textContent = account.email;
+    try {
+      me = await rpc("rpl_web_me", {});
+    } catch (e) {
+      if (e.code === "PT401" || /JWT|sign in/i.test(e.message)) { forgetAccount(); renderAccount(); }
+      else toast(e.message);
+      return;
+    }
+    const form = $("my-details");
+    for (const field of ["name", "phone", "address"]) form.elements[field].value = me[field] || "";
+    const list = $("my-orders");
+    list.textContent = "";
+    if (!me.orders.length) {
+      const li = document.createElement("li"); li.textContent = "No orders yet. They'll show here once you order."; list.append(li);
+    }
+    for (const o of me.orders) {
+      const li = document.createElement("li");
+      const head = document.createElement("div"); head.className = "order-head";
+      const number = document.createElement("span"); number.textContent = o.number;
+      const total = document.createElement("span"); total.textContent = money(o.total);
+      head.append(number, total);
+      const status = document.createElement("div"); status.className = "order-status";
+      status.textContent = o.status + " · " + String(o.placed_at || "").slice(0, 10) + (o.invoice_number ? " · invoice " + o.invoice_number : "");
+      const lines = document.createElement("p"); lines.className = "order-lines";
+      lines.textContent = (o.lines || []).map((l) => l.qty + " × " + l.name).join(", ");
+      const actions = document.createElement("div"); actions.className = "order-actions";
+      if (o.pay_link) {
+        const pay = document.createElement("a"); pay.className = "pay"; pay.href = o.pay_link; pay.rel = "noopener";
+        pay.textContent = "Pay " + money(o.balance) + " now"; actions.append(pay);
+      }
+      const again = document.createElement("button"); again.type = "button"; again.textContent = "Order again";
+      again.onclick = () => orderAgain(o);
+      actions.append(again);
+      li.append(head, status, lines, actions);
+      list.append(li);
+    }
+  }
+
+  function orderAgain(order) {
+    let added = 0;
+    for (const l of order.lines || []) {
+      const product = products.find((x) => (x.id === l.item_id || x.id === l.key) && x.in_stock);
+      if (product) { setQty(product.id, (basket[product.id] || 0) + Number(l.qty)); added++; }
+    }
+    if (!added) { toast("None of those are in stock right now"); return; }
+    closeAccount();
+    openBasket();
+    if (added < (order.lines || []).length) toast("Some of those aren't in stock right now");
+  }
+
+  async function sendCode(event) {
+    event.preventDefault();
+    const email = $("sign-in").elements.email.value.trim();
+    const error = $("sign-in-error");
+    error.hidden = true;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { error.textContent = "Please give your email address."; error.hidden = false; return; }
+    const button = $("send-code");
+    button.disabled = true;
+    try {
+      await auth("otp?redirect_to=" + encodeURIComponent(location.origin + location.pathname), { email, create_user: true });
+      $("code-step").hidden = false;
+      button.textContent = "Send another code";
+      $("sign-in").elements.code.focus();
+    } catch (e) { error.textContent = e.message; error.hidden = false; }
+    finally { button.disabled = false; }
+  }
+  async function verifyCode() {
+    const form = $("sign-in");
+    const error = $("sign-in-error");
+    error.hidden = true;
+    try {
+      keep(await auth("verify", { type: "email", email: form.elements.email.value.trim(), token: form.elements.code.value.trim() }));
+      form.reset(); $("code-step").hidden = true; $("send-code").textContent = "Email me a sign-in code";
+      renderAccount();
+    } catch (e) { error.textContent = e.message; error.hidden = false; }
+  }
+  async function saveDetails(event) {
+    event.preventDefault();
+    const form = $("my-details");
+    try {
+      await rpc("rpl_web_save_me", { p_name: form.elements.name.value, p_phone: form.elements.phone.value, p_address: form.elements.address.value });
+      toast("Saved");
+      renderAccount();
+    } catch (e) { toast(e.message); }
+  }
+  async function signOut(event) {
+    event.preventDefault();
+    const bearer = account && account.access;
+    forgetAccount();
+    renderAccount();
+    if (bearer) auth("logout", {}, bearer).catch(() => {});
+  }
+  // The order form, filled in from the account.
+  function fillCheckout() {
+    if (!account) return;
+    const form = $("checkout");
+    form.elements.email.value = account.email; form.elements.email.readOnly = true;
+    if (!me) return;
+    for (const field of ["name", "phone", "address"]) if (!form.elements[field].value && me[field]) form.elements[field].value = me[field];
   }
 
   // --- The receipt, after paying a pay link ---
@@ -500,6 +692,12 @@
   }
 
   $("open-basket").onclick = openBasket;
+  $("open-account").onclick = openAccount;
+  $("close-account").onclick = closeAccount;
+  $("sign-in").addEventListener("submit", sendCode);
+  $("verify-code").onclick = verifyCode;
+  $("my-details").addEventListener("submit", saveDetails);
+  $("sign-out").addEventListener("click", signOut);
   $("close-basket").onclick = closeBasket;
   $("scrim").onclick = closeBasket;
   $("done-close").onclick = closeBasket;
@@ -512,6 +710,8 @@
   watchReveals();
   requestAnimationFrame(() => document.body.classList.add("ready")); // the hero rises in
   load();
+  if (fromEmailLink()) openAccount();
+  else if (account) rpc("rpl_web_me", {}).then((found) => { me = found; }).catch(() => {});
   const landed = new URLSearchParams(location.search);
   if (landed.get("receipt") && landed.get("s")) showReceipt(landed.get("receipt"), landed.get("s"));
 })();

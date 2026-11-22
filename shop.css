@@ -411,3 +411,27 @@ body.ready .rise:nth-child(5) { transition-delay: .32s; }
 .receipt-lines li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .receipt-total { font-weight: 700; margin: 10px 0; }
 .receipt-note { color: var(--ink-soft); }
+
+/* The customer's account */
+.account-button { margin-left: auto; margin-right: 8px; }
+.account-button + .basket-button { margin-left: 0; }
+#account-sheet { overflow-y: auto; }
+#account-sheet #code-step { display: grid; gap: 12px; }
+#account-sheet #code-step[hidden] { display: none; }
+.orders-title { margin: 22px 0 8px; }
+.my-orders { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.my-orders > li { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--card); }
+.my-orders .order-head { display: flex; justify-content: space-between; gap: 10px; font-weight: 700; }
+.my-orders .order-status { color: var(--navy-2); font-weight: 600; margin: 4px 0 8px; }
+.my-orders .order-lines { color: var(--ink-soft); font-size: 14px; margin: 0 0 8px; }
+.my-orders .order-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.my-orders .order-actions a, .my-orders .order-actions button { font: inherit; font-size: 14px; font-weight: 600; border-radius: 999px;
+  padding: 8px 14px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer; text-decoration: none; }
+.my-orders .order-actions .pay { background: var(--gold); border-color: var(--gold); color: var(--navy); }
+@media (min-width: 720px) { .account-button { margin-left: 0; } }
+
+/* The shop's announcement, featured products and online prices */
+.banner { margin: 0; padding: 10px 16px; text-align: center; font-weight: 700; font-size: 14.5px; background: var(--gold); color: var(--navy); }
+.featured-tag { position: absolute; top: 10px; right: 10px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: var(--navy); color: var(--gold); }
+.price .was { color: var(--muted); font-weight: 500; margin-right: 2px; }
