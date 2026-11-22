@@ -48,7 +48,128 @@
 
   // --- the cloud ---
   class ApiError extends Error { constructor(message, maybeDone) { super(message); this.maybeDone = maybeDone; } }
+  // --- practice: selling on this iPad with nothing reaching the shop ---
+  // Reads (products, prices, stock, rates, lists) go to the shop as usual;
+  // orders, quotes, payments, invoices and the sales report are made here,
+  // in the shop's own words, and kept only until practice ends. Anything
+  // else that would change the shop is refused. As the Android app's.
+  const NOT_IN_PRACTICE = "Not in practice: this would change the shop. End practice (More) to do it for real.";
+  const PRACTICE_READS = new Set(["rpl_mobile_login", "rpl_mobile_logout", "rpl_mobile_connection", "rpl_mobile_catalog",
+    "rpl_mobile_company", "rpl_mobile_rates", "rpl_mobile_duty_proof", "rpl_mobile_consignments", "rpl_mobile_consignment_choices",
+    "rpl_mobile_consignment_taken", "rpl_mobile_consignment_report", "rpl_mobile_users", "rpl_mobile_web_orders",
+    "rpl_mobile_photo_products", "rpl_mobile_approvals", "rpl_mobile_purchase_orders", "rpl_mobile_stock_lookup",
+    "rpl_mobile_count_items", "rpl_mobile_order_plan", "rpl_mobile_attachment"]);
+  const practice = { on: false, products: {}, rates: {}, orders: [], quotes: [], requests: [], n: 0 };
+  function practiceStart() { Object.assign(practice, { on: true, products: {}, rates: {}, orders: [], quotes: [], requests: [], n: 0 }); }
+  function practiceStop() { Object.assign(practice, { on: false, products: {}, rates: {}, orders: [], quotes: [], requests: [], n: 0 }); }
+  const pnow = () => new Date().toISOString().slice(0, 19);
+  const pnum = (prefix) => "PRACTICE-" + prefix + "-" + String(++practice.n).padStart(4, "0");
+  const r2 = (x) => Math.round(x * 100) / 100;
+  function practiceSaw(fn, data) {
+    if (!practice.on) return data;
+    if (fn === "rpl_mobile_catalog" && Array.isArray(data)) {
+      const held = {};
+      for (const o of practice.orders) if (o.status !== "cancelled") for (const l of o.lines) held[l.item_id] = (held[l.item_id] || 0) + l.qty;
+      for (const row of data) { practice.products[row.id] = row; if (held[row.id]) row.qty = (row.qty || 0) - held[row.id]; }
+    }
+    if (fn === "rpl_mobile_rates" && data) Object.assign(practice.rates, data);
+    return data;
+  }
+  function practiceLines(args) {
+    const out = (args.p_lines || []).map((g) => {
+      const p = practice.products[g.item_id];
+      if (!p) throw new ApiError("That product isn't in today's list: refresh it");
+      const price = g.unit_price ?? p.price;
+      return { item_id: g.item_id, sku: p.sku, name: p.name, qty: g.qty, unit_price: price, list_price: p.price, line_total: r2(g.qty * price) };
+    });
+    if (!out.length) throw new ApiError("Add something to sell");
+    return out;
+  }
+  function practiceRow(args, kind) {
+    const lines = practiceLines(args);
+    const c = args.p_customer || {};
+    const total = r2(lines.reduce((t, l) => t + l.line_total, 0) - (args.p_discount || 0) + (args.p_delivery || 0));
+    return { id: "practice-" + kind + "-" + (practice.n + 1), branch: args.p_branch, lines, total, discount: args.p_discount || 0,
+      customer_name: c.name || "", customer_phone: c.phone || "", customer_address: c.address || "", customer_email: c.email || "",
+      created_by: session ? session.username : "", created_at: pnow() };
+  }
+  function practiceInvoiced(o) {
+    if (o.status === "payment_pending") { o.status = "invoiced"; o.invoice_number = pnum("INV"); o.invoiced_at = pnow(); }
+    return { order_number: o.order_number, paid: o.paid, balance: o.balance, invoice_number: o.invoice_number, invoice_waits: null };
+  }
+  function practiceAnswer(fn, args) {
+    const order = (id) => practice.orders.find((o) => o.id === id) || (() => { throw new ApiError("That order no longer exists"); })();
+    switch (fn) {
+      case "rpl_mobile_create_order": {
+        const o = Object.assign(practiceRow(args, "order"), { status: "payment_pending", paid: 0, payments: [], invoice_number: null });
+        o.order_number = pnum("SO"); o.balance = o.total; practice.orders.push(o);
+        return { id: o.id, order_number: o.order_number, total: o.total, discount: o.discount };
+      }
+      case "rpl_mobile_create_quote": {
+        const q = Object.assign(practiceRow(args, "quote"), { status: "open", order_number: null, delivery: args.p_delivery || 0,
+          valid_until: new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10) });
+        q.quote_number = pnum("QT"); practice.quotes.push(q);
+        return { id: q.id, quote_number: q.quote_number, total: q.total, discount: q.discount };
+      }
+      case "rpl_mobile_quotes": return practice.quotes.filter((q) => q.branch === args.p_branch).slice().reverse();
+      case "rpl_mobile_orders": return practice.orders.filter((o) => o.branch === args.p_branch).slice().reverse();
+      case "rpl_mobile_take_payment": {
+        const o = order(args.p_order_id);
+        if (o.status === "cancelled") throw new ApiError(o.order_number + " was deleted");
+        if (o.balance <= 0.004) throw new ApiError(o.order_number + " is paid in full");
+        const currency = args.p_currency || "USD";
+        let amount = r2(args.p_amount || 0), tendered = args.p_tendered || 0;
+        if (currency !== "USD") {
+          const rate = practice.rates[currency];
+          if (!rate) throw new ApiError(currency + " isn't taken: set its rate on a shop PC first");
+          amount = r2(tendered / rate);
+          if (amount > o.balance) { amount = o.balance; tendered = r2(o.balance * rate); }
+        }
+        if (amount <= 0) throw new ApiError("Enter the amount paid");
+        if (amount > o.balance + 0.004) throw new ApiError("That is more than the " + o.balance.toFixed(2) + " owed on " + o.order_number);
+        o.payments.push({ method: args.p_method, amount }); o.paid = r2(o.paid + amount); o.balance = r2(o.balance - amount);
+        return Object.assign(practiceInvoiced(o), { amount, currency, tendered: currency === "USD" ? amount : tendered });
+      }
+      case "rpl_mobile_issue_invoice": return practiceInvoiced(order(args.p_order_id));
+      case "rpl_mobile_delete_order": {
+        const o = order(args.p_order_id);
+        if (o.status !== "payment_pending" || o.paid > 0.004) throw new ApiError(o.order_number + " is already invoiced");
+        o.status = "cancelled"; return {};
+      }
+      case "rpl_mobile_report": {
+        const sold = practice.orders.filter((o) => o.status === "invoiced" && (!args.p_branch || o.branch === args.p_branch));
+        const sales = sold.reduce((t, o) => t + o.total, 0);
+        const mix = {}, top = {};
+        for (const o of sold) {
+          for (const p of o.payments) mix[p.method] = (mix[p.method] || 0) + p.amount;
+          for (const l of o.lines) { const t = top[l.sku] || { sku: l.sku, name: l.name, units: 0, revenue: 0 }; t.units += l.qty; t.revenue += l.line_total; top[l.sku] = t; }
+        }
+        const tops = Object.values(top).sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+        const taken = Object.values(mix).reduce((t, x) => t + x, 0);
+        return { sales, returns: 0, net_revenue: sales, previous_net_revenue: 0, full: false, invoices: sold.length,
+          payment_mix: Object.entries(mix).map(([method, amount]) => ({ method, amount })), top_products: tops,
+          orders_awaiting_payment: { count: 0, total: 0 }, stock: { out: 0, low: 0 }, received: taken,
+          owed: { count: sold.filter((o) => o.balance > 0.004).length, total: sold.reduce((t, o) => t + o.balance, 0) },
+          me: { sales, returns: 0, invoices: sold.length, previous: 0, payments_taken: taken, top_products: tops },
+          gross_profit: null, expenses: null, written_off: null, net_profit: null, balances: null };
+      }
+      case "rpl_mobile_request": {
+        practice.requests.push({ id: "practice-request-" + (++practice.n), kind: args.p_kind, branch: args.p_branch, status: "failed",
+          result: "Practice: not sent to the shop", created_at: pnow(), done_at: pnow() });
+        return { id: practice.requests[practice.requests.length - 1].id, status: "waiting" };
+      }
+      case "rpl_mobile_requests": return practice.requests.slice().reverse();
+      case "rpl_mobile_invoice_pdf": throw new ApiError("Practice invoices aren't printed: the invoice PDF comes from the shop's PC");
+      default: throw new ApiError(NOT_IN_PRACTICE);
+    }
+  }
+
   async function api(fn, args) {
+    if (practice.on && !PRACTICE_READS.has(fn)) return practiceAnswer(fn, args || {});
+    return practiceSaw(fn, await shopApi(fn, args));
+  }
+
+  async function shopApi(fn, args) {
     let response;
     try {
       response = await fetch(config.supabaseUrl.replace(/\/$/, "") + "/rest/v1/rpc/" + fn, {
@@ -129,6 +250,7 @@
   });
 
   function signOut(why) {
+    practiceStop();
     if (session) api("rpl_mobile_logout", { p_token: session.token }).catch(() => {});
     session = null; forget("rpl-staff-session"); forget(LOCK_KEY); locked = false;
     render("login", why);
@@ -197,6 +319,8 @@
     current = screen;
     chrome();
     view.textContent = "";
+    if (practice.on && session) view.append(h("div", { class: "practice" }, h("b", { class: "grow" }, "PRACTICE · nothing here is real or sent to the shop"),
+      h("button", { onclick: () => { practiceStop(); toast("Practice over: back to the real shop"); render(current); } }, "End")));
     window.scrollTo(0, 0);
     try {
       await SCREENS[screen](note);
@@ -606,6 +730,11 @@
           h("div", {}, "Signed in as ", h("b", {}, session.username), " (" + (session.ultra ? "Ultra Admin" : session.role.replace("_", " ")) + ")"),
           h("div", { class: "muted" }, "Branch " + branch),
           h("button", { class: "full", onclick: () => signOut() }, "Sign out")));
+      view.append(h("div", { class: "card stack" },
+        h("b", {}, "Practice"),
+        h("div", { class: "muted" }, "Sell, take payments and return on today's real products, with nothing reaching the shop. What you do in practice stays on this iPad and goes when you end it."),
+        practice.on ? h("button", { class: "danger full", onclick: () => { practiceStop(); toast("Practice over: back to the real shop"); render("more"); } }, "End practice")
+          : h("button", { class: "primary full", onclick: () => { practiceStart(); toast("Practice: nothing here reaches the shop"); render("sell"); } }, "Start practice")));
       if (await faceIdAvailable()) {
         const on = !!lockOn();
         view.append(h("div", { class: "card stack" },
