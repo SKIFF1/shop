@@ -148,6 +148,10 @@
 
   async function render(screen, note) {
     if (!session) screen = "login";
+    // Into a tool slides in from the right; back to a tab, from the left.
+    const backwards = TOOLS.some(([t]) => t === current) && screen === "tools";
+    view.classList.remove("enter", "back"); void view.offsetWidth;
+    if (screen !== current) view.classList.add(backwards ? "back" : "enter");
     current = screen;
     chrome();
     view.textContent = "";
@@ -694,6 +698,7 @@
   // --- start ---
   $("signout").addEventListener("click", () => signOut());
   $("branch").addEventListener("change", (e) => { branch = e.target.value; store("rpl-staff-branch", branch); cart.lines = []; render(current); });
+  setTimeout(() => { const i = $("intro"); if (i) i.remove(); }, 2000);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   render(session ? (TABS.find(([, , , ok]) => ok()) || ["more"])[0] : "login");
 })();
