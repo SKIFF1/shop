@@ -81,6 +81,10 @@
   // again on every call; this only keeps away what they can't use.
   function can(key) {
     if (!session) return false;
+    // A part of a screen goes with the screen unless taken away ("not:<key>").
+    if (key.startsWith("screen:") && key.includes("/")) {
+      return can(key.split("/")[0]) && !(Array.isArray(session.permissions) && session.permissions.includes("not:" + key));
+    }
     if (Array.isArray(session.permissions)) return session.permissions.includes(key);
     if (session.role === "admin") return true;
     return session.role === "sales_person" && ["take_payments", "give_discounts", "record_expenses", "screen:Sales Order", "screen:Web Orders"].includes(key);
@@ -144,8 +148,8 @@
   // Android app: each follows this person's permissions.
   const TOOLS = [
     ["approvals", "✅", "Approvals", () => ["approve_purchase_orders", "approve_stock", "approve_write_offs"].some(can)],
-    ["pos", "🚚", "Purchase orders", () => can("screen:Purchase Orders")],
-    ["count", "📋", "Stock take", () => can("screen:Stock Take")],
+    ["pos", "🚚", "Purchase orders", () => can("screen:Purchase Orders/Orders")],
+    ["count", "📋", "Stock take", () => can("screen:Stock Take/Count and send for approval")],
     ["lookup", "🔎", "Stock lookup", () => can("screen:Sales Order") || can("screen:Inventory")],
     ["expense", "💸", "Record expense", () => can("record_expenses")],
     ["photos", "📷", "Product photos", () => can("screen:Inventory")],
