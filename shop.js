@@ -143,13 +143,18 @@
     $("footer-address").textContent = (company.address || "").split(/\s*[,\n]\s*/).filter(Boolean).join("\n");
     const actions = $("footer-actions");
     actions.textContent = "";
-    const phone = (company.phone || "").split(/[,;/\n]/)[0].trim();
-    if (phone) {
+    // Every number in the company's details ("0714 709 001 / 0782 609 917"): WhatsApp and call each.
+    // Products' "Ask on WhatsApp" goes to the first.
+    const phones = (company.phone || "").split(/[,;/\n]/).map((x) => x.trim()).filter((x) => x.replace(/\D/g, "").length >= 9);
+    phones.forEach((phone, i) => {
       const digits = phone.replace(/[^\d+]/g, "");
       const wa = digits.startsWith("+") ? digits.slice(1) : digits.startsWith("0") ? "263" + digits.slice(1) : digits;
-      whatsapp = wa;
-      actions.append(link("https://wa.me/" + wa, "WhatsApp us", "chip-link whatsapp"), link("tel:" + digits, "Call " + phone, "chip-link"));
-    }
+      const local = wa.startsWith("263") ? "0" + wa.slice(3) : digits;
+      const shown = local.length === 10 ? local.slice(0, 4) + " " + local.slice(4, 7) + " " + local.slice(7) : phone;
+      if (i === 0) whatsapp = wa;
+      actions.append(link("https://wa.me/" + wa, phones.length > 1 ? "WhatsApp " + shown : "WhatsApp us", "chip-link whatsapp"),
+        link("tel:" + digits, "Call " + shown, "chip-link"));
+    });
     const email = (company.email || "").split(/[,;/\n]/)[0].trim();
     if (email) actions.append(link("mailto:" + email, email, "chip-link"));
 
