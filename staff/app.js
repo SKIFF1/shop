@@ -711,25 +711,73 @@
     return card;
   }
 
-  function payment(o, done) {
-    const amount = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: (o.balance > 0 ? o.balance : o.total).toFixed(2) });
-    const method = h("select", {}, METHODS.map(([k, v]) => h("option", { value: k }, v)));
+  // ZiG and Rand, once a shop PC sets their rate: what is typed is what the
+  // customer handed over in it, converted in the cloud at that rate; cash
+  // beyond the balance is change. Rand is cash only. Paynow has no ZiG yet.
+  const CURRENCY = { USD: "US$", ZWG: "ZiG", ZAR: "Rand" };
+  const cents = (n) => Math.round(n * 100) / 100;
+  const plain = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  async function payment(o, done) {
+    let rates = {};
+    try { rates = await api("rpl_mobile_rates", { p_token: session.token }) || {}; } catch (e) { rates = {}; }
+    const balance = o.balance > 0 ? o.balance : o.total;
+    let currency = "USD";
+    const amount = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: balance.toFixed(2) });
+    const method = h("select", {});
+    const reference = h("input", { type: "text", maxlength: "64", placeholder: "Transaction reference (optional)" });
+    const owedLine = h("div", { class: "muted" });
+    const note = h("div", { class: "muted small" });
     const err = h("div", { class: "err" });
     let request = uuid();
-    amount.addEventListener("input", () => { request = uuid(); });
-    method.addEventListener("change", () => { request = uuid(); });
+    const fresh = () => { request = uuid(); };
+    const owed = () => currency === "USD" ? balance : cents(balance * rates[currency]);
+    function fillMethods() {
+      const keep = method.value;
+      method.replaceChildren(...METHODS.filter(([k]) => currency !== "ZAR" || k === "cash").map(([k, v]) => h("option", { value: k }, v)));
+      if ([...method.options].some((op) => op.value === keep)) method.value = keep;
+    }
+    function show() {
+      const wallet = method.value === "ecocash" || method.value === "innbucks";
+      reference.style.display = wallet ? "" : "none";
+      if (currency === "USD") { owedLine.textContent = "Owed " + money(balance); note.textContent = ""; return; }
+      const name = CURRENCY[currency], value = Number(amount.value) || 0;
+      owedLine.textContent = "Owed " + money(balance) + " · " + name + " " + plain(owed()) + " at " + rates[currency] + " per US$";
+      const change = method.value === "cash" ? value - owed() : 0;
+      note.textContent = value <= 0 ? "" : change > 0.004 ? "Change: " + name + " " + plain(change) + " · records " + money(balance)
+        : "Records " + money(cents(value / rates[currency])) + " in the books";
+      if (wallet) note.textContent += (note.textContent ? ". " : "") + "Paynow doesn't take ZiG yet: record what was already paid.";
+    }
+    const chips = h("div", { class: "row" });
+    const codes = ["USD"].concat(["ZWG", "ZAR"].filter((c) => rates[c] > 0));
+    const pick = (code) => {
+      currency = code; fresh(); fillMethods(); amount.value = owed().toFixed(2);
+      chips.querySelectorAll("button").forEach((b) => b.classList.toggle("gold", b.dataset.code === code));
+      show();
+    };
+    codes.forEach((c) => chips.append(h("button", { "data-code": c, class: c === "USD" ? "gold" : "", onclick: () => pick(c) }, CURRENCY[c])));
+    fillMethods();
+    amount.addEventListener("input", () => { fresh(); show(); });
+    method.addEventListener("change", () => { fresh(); show(); });
     const sheet = h("div", { class: "sheet", onclick: (e) => { if (e.target === sheet) sheet.remove(); } });
     const go = h("button", { class: "gold full", onclick: async () => {
       go.disabled = true; err.textContent = "";
+      const args = { p_token: session.token, p_order_id: o.id, p_method: method.value, p_request_id: request };
+      if (reference.value.trim() && reference.style.display !== "none") args.p_reference = reference.value.trim();
+      if (currency === "USD") args.p_amount = Number(amount.value);
+      else Object.assign(args, { p_amount: 0, p_currency: currency, p_tendered: Number(amount.value) });
       try {
-        const r = await api("rpl_mobile_take_payment", { p_token: session.token, p_order_id: o.id, p_amount: Number(amount.value), p_method: method.value, p_request_id: request });
+        const r = await api("rpl_mobile_take_payment", args);
         sheet.remove();
-        toast(money(r.paid) + " taken" + (r.balance > 0.004 ? ", " + money(r.balance) + " still owed" : "") + (r.invoice_number ? " · invoice " + r.invoice_number : r.invoice_waits ? " · " + r.invoice_waits : ""), 4500);
+        const what = currency === "USD" ? money(r.paid) + " taken" : CURRENCY[currency] + " " + plain(r.tendered) + " (" + money(r.amount) + ") taken";
+        toast(what + (r.balance > 0.004 ? ", " + money(r.balance) + " still owed" : "") + (r.invoice_number ? " · invoice " + r.invoice_number : r.invoice_waits ? " · " + r.invoice_waits : ""), 4500);
         done && done();
       } catch (e) { err.textContent = e.maybeDone ? e.message + ". Check the order before trying again." : e.message; go.disabled = false; }
     } }, "Take payment");
-    sheet.append(h("div", { class: "panel stack" }, h("h2", {}, "Payment · " + o.order_number), h("div", { class: "muted" }, "Owed " + money(o.balance > 0 ? o.balance : o.total)),
-      h("label", {}, "Amount"), amount, h("label", {}, "Paid with"), method,
+    show();
+    sheet.append(h("div", { class: "panel stack" }, h("h2", {}, "Payment · " + o.order_number), owedLine,
+      codes.length > 1 ? chips : null,
+      h("label", {}, "Amount"), amount, note, h("label", {}, "Paid with"), method, reference,
       h("p", { class: "muted small" }, "EcoCash or InnBucks here only records money already paid. To prompt the customer's phone, use a shop PC or the Android app."),
       go, h("button", { class: "full", onclick: () => sheet.remove() }, "Cancel"), err));
     document.body.append(sheet);
