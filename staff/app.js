@@ -87,9 +87,46 @@
   }
   const cart = { lines: [], customer: { name: "", phone: "", email: "", address: "" }, delivery: 0, discount: 0, request: null };
 
+  // --- Face ID / Touch ID: a passkey kept on this iPad or iPhone, asked
+  // for on opening and after five minutes away, as the Android app asks
+  // for the fingerprint or face. It only guards this device's sign-in: the
+  // shop still checks the session on every call. ---
+  const LOCK_KEY = "rpl-staff-lock";
+  const AWAY_LIMIT = 5 * 60 * 1000;
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  const randomBytes = (n) => crypto.getRandomValues(new Uint8Array(n));
+  function lockOn() { const l = store(LOCK_KEY); return l && session && l.user === session.username ? l : null; }
+  let locked = !!lockOn();
+  async function faceIdAvailable() {
+    try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
+    catch (e) { return false; }
+  }
+  async function turnOnFaceId() {
+    const made = await navigator.credentials.create({ publicKey: {
+      challenge: randomBytes(32), rp: { name: (config.name || "RPL") + " staff", id: location.hostname },
+      user: { id: randomBytes(16), name: session.username, displayName: session.username },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required", residentKey: "discouraged" },
+      attestation: "none", timeout: 60000 } });
+    store(LOCK_KEY, { id: b64(made.rawId), user: session.username });
+  }
+  async function unlock() {
+    const l = lockOn();
+    if (!l) { locked = false; return; }
+    await navigator.credentials.get({ publicKey: { challenge: randomBytes(32), rpId: location.hostname, userVerification: "required",
+      allowCredentials: [{ type: "public-key", id: unb64(l.id), transports: ["internal"] }], timeout: 60000 } });
+    locked = false;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { store("rpl-staff-away", Date.now()); return; }
+    const away = store("rpl-staff-away");
+    if (lockOn() && !locked && away && Date.now() - away > AWAY_LIMIT) { locked = true; render("lock"); }
+  });
+
   function signOut(why) {
     if (session) api("rpl_mobile_logout", { p_token: session.token }).catch(() => {});
-    session = null; forget("rpl-staff-session");
+    session = null; forget("rpl-staff-session"); forget(LOCK_KEY); locked = false;
     render("login", why);
   }
 
@@ -132,7 +169,7 @@
   }
 
   function chrome() {
-    const signedIn = !!session;
+    const signedIn = !!session && current !== "lock";
     $("tabs").hidden = !signedIn; $("signout").hidden = !signedIn; $("branch").hidden = !signedIn || session.branches.length < 2;
     if (!signedIn) return;
     const tabs = $("tabs"); tabs.textContent = "";
@@ -148,6 +185,7 @@
 
   async function render(screen, note) {
     if (!session) screen = "login";
+    else if (locked && lockOn()) screen = "lock";
     // Into a tool slides in from the right; back to a tab, from the left.
     const backwards = TOOLS.some(([t]) => t === current) && screen === "tools";
     view.classList.remove("enter", "back"); void view.offsetWidth;
@@ -164,6 +202,21 @@
   }
 
   const SCREENS = {
+    lock() {
+      const err = h("div", { class: "err" });
+      const go = h("button", { class: "primary full", onclick: async () => {
+        err.textContent = "";
+        try { await unlock(); render(TABS.find(([, , , ok]) => ok())[0]); }
+        catch (e) { err.textContent = e.name === "NotAllowedError" ? "Not unlocked. Try again." : (e.message || "Couldn't unlock"); }
+      } }, "Unlock with Face ID");
+      view.append(h("div", { class: "login card stack" },
+        h("div", { class: "mark" }, "R"),
+        h("h1", { class: "center" }, "Signed in as " + session.username),
+        h("p", { class: "muted center" }, "Unlock with Face ID, Touch ID or this device's passcode."),
+        go, err,
+        h("button", { class: "full", onclick: () => signOut() }, "Sign in as someone else")));
+    },
+
     login(note) {
       const user = h("input", { autocomplete: "username", autocapitalize: "none", placeholder: "Username" });
       const pin = h("input", { type: "password", inputmode: "numeric", autocomplete: "current-password", placeholder: "PIN" });
@@ -542,6 +595,20 @@
           h("div", {}, "Signed in as ", h("b", {}, session.username), " (" + (session.ultra ? "Ultra Admin" : session.role.replace("_", " ")) + ")"),
           h("div", { class: "muted" }, "Branch " + branch),
           h("button", { class: "full", onclick: () => signOut() }, "Sign out")));
+      if (await faceIdAvailable()) {
+        const on = !!lockOn();
+        view.append(h("div", { class: "card stack" },
+          h("b", {}, "Face ID unlock"),
+          h("div", { class: "muted" }, on ? "On: the app asks for Face ID (or Touch ID) on opening and after five minutes away."
+            : "Ask for Face ID (or Touch ID) on opening and after five minutes away, so no one else works as you."),
+          on ? h("div", { class: "row" },
+            h("button", { class: "grow", onclick: () => { locked = true; render("lock"); } }, "Lock now"),
+            h("button", { class: "danger", onclick: () => { forget(LOCK_KEY); toast("Face ID unlock is off"); render("more"); } }, "Turn off"))
+            : h("button", { class: "primary full", onclick: async () => {
+                try { await turnOnFaceId(); toast("Face ID unlock is on"); render("more"); }
+                catch (e) { toast(e.name === "NotAllowedError" ? "Face ID wasn't set up" : (e.message || "Couldn't turn it on"), 4000); }
+              } }, "Turn on Face ID unlock")));
+      }
       if (session.ultra) {
         const users = await api("rpl_mobile_users", { p_token: session.token });
         const list = h("div", { class: "card list" });
@@ -700,5 +767,5 @@
   $("branch").addEventListener("change", (e) => { branch = e.target.value; store("rpl-staff-branch", branch); cart.lines = []; render(current); });
   setTimeout(() => { const i = $("intro"); if (i) i.remove(); }, 2000);
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
-  render(session ? (TABS.find(([, , , ok]) => ok()) || ["more"])[0] : "login");
+  render(session ? (locked && lockOn() ? "lock" : (TABS.find(([, , , ok]) => ok()) || ["more"])[0]) : "login");
 })();
