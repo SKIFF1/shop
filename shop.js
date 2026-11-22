@@ -191,9 +191,29 @@
     return a;
   }
 
+  // Categories set in the app (Products online…): a button each, All first.
+  // Searching looks across every category.
+  let category = "";
+  function renderCategories() {
+    const names = [...new Set(products.map((p) => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const bar = $("categories");
+    bar.textContent = "";
+    bar.hidden = names.length === 0;
+    if (category && !names.includes(category)) category = "";
+    for (const name of [""].concat(names)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "category" + (name === category ? " on" : "");
+      button.textContent = name || "All";
+      button.setAttribute("aria-pressed", String(name === category));
+      button.onclick = () => { category = name; renderCategories(); renderGrid(); };
+      bar.append(button);
+    }
+  }
+
   function renderGrid() {
     const query = $("search").value.trim().toLowerCase();
-    const shown = products.filter((p) => !query || p.name.toLowerCase().includes(query));
+    const shown = products.filter((p) => query ? p.name.toLowerCase().includes(query) : !category || p.category === category);
     const grid = $("grid");
     grid.textContent = "";
     $("empty").hidden = shown.length > 0;
@@ -687,6 +707,7 @@
       const shop = await rpc("rpl_web_shop", { p_branch: branch || "" });
       products = shop.products || [];
       renderShop(shop);
+      renderCategories();
       renderGrid();
       renderBasket();
     } catch (e) {
