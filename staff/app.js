@@ -504,7 +504,8 @@
           h("div", { class: "row" }, h("b", { class: "grow" }, po.number + " · " + po.supplier),
             h("span", { class: "pill " + (po.approval === "approved" ? "good" : "warn") }, po.awaiting_receipt ? "delivery waits" : po.approval || po.status)),
           ...lines.map((l) => h("div", { class: "row small" }, h("span", { class: "grow" }, l.qty + " × " + l.name), h("span", { class: "money" }, money(l.qty * l.unit_cost)))),
-          h("div", { class: "muted small" }, po.shipment ? "Consignment " + po.shipment : "On no consignment"),
+          h("div", { class: "small " + (po.shipment ? "muted" : receivable ? "warn" : "muted") },
+            po.shipment ? "Consignment " + po.shipment : receivable ? "On no consignment yet: receiving asks which, so its duty and freight are in its cost" : "On no consignment"),
           receivable ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null,
           h("div", { class: "row" },
             can("screen:Consignments/New and edit consignments") && po.approval !== "not_approved"
@@ -674,11 +675,13 @@
         h("div", { class: "row" }, h("span", { class: "grow muted" }, "Taken from sales"), h("b", {}, money(taken))),
         h("div", { class: "row" }, h("span", { class: "grow muted" }, "Margin on what sold"), h("b", {}, money(margin))),
         h("div", { class: "row" }, h("span", { class: "grow muted" }, "Still on the shelf"), h("b", {}, money(sum("value_left")))),
-        h("div", { class: "small " + (taken >= landed ? "good" : "warn") }, taken >= landed ? "Paid for itself: " + money(taken - landed) + " over its landed cost" : money(landed - taken) + " still to take before it has paid for itself"));
+        h("div", { class: "small " + (taken >= landed ? "good" : "warn") }, taken >= landed ? "Paid for itself: " + money(taken - landed) + " over its landed cost" : money(landed - taken) + " still to take before it has paid for itself"),
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Projected takings (all " + r.orders.length + " order(s), today's prices)"), h("b", {}, money(sum("projected_revenue")))),
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Projected margin"), h("b", {}, money(sum("projected_margin")))));
     }
     for (const row of r.rows) {
       kids.push(h("div", { class: "card" }, h("b", {}, row.name || row.sku),
-        h("div", { class: "small" }, "Ordered " + row.ordered + " · received " + row.received + " · sold " + row.sold + (row.written_off ? " · written off " + row.written_off : "") + " · left " + row.left),
+        h("div", { class: "small" }, "Ordered " + row.ordered + " · received " + row.received + " · sold " + row.sold + (row.written_off ? " · written off " + row.written_off : "") + " · left " + row.left + (row.to_come ? " · to come " + row.to_come : "")),
         r.money ? h("div", { class: "muted small" }, "Landed " + money(row.received ? row.landed / row.received : 0) + " each · took " + money(row.revenue) + " · margin " + money(row.revenue - row.cost_of_sold)) : null));
     }
     sheetWith((number || r.number) + ": report", ...kids);
@@ -710,18 +713,55 @@
       } }, "Send"));
   }
 
-  function receive(po) {
+  // A delivery and the consignment it came in: the order's, another current
+  // one, or a new one a shop PC records first (never a number already used).
+  async function receive(po) {
+    let choices = [];
+    try { choices = await api("rpl_mobile_consignment_choices", { p_token: session.token }); } catch (e) { choices = []; }
     const rows = (po.lines || []).map((l) => {
       const qty = h("input", { type: "number", inputmode: "decimal", value: l.qty });
       const cost = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: l.unit_cost });
       return [l, qty, cost];
     });
-    const sheet = sheetWith("Receive " + po.number, h("p", { class: "muted small" }, "What arrived, at what cost. Duty and freight can be added on a PC. A shop PC raises it for approval."),
+    const pick = h("select", {}, h("option", { value: "" }, "Pick the consignment it came in"),
+      ...choices.map((c) => h("option", { value: c.id }, c.number + " · " + String(c.arrival || "").slice(0, 10) + (c.supplier ? " · " + c.supplier : ""))),
+      h("option", { value: "new" }, "+ New consignment"));
+    pick.value = po.shipment_id || "";
+    const number = h("input", { placeholder: "Consignment number", autocapitalize: "characters" });
+    const arrival = h("input", { type: "date", value: new Date().toISOString().slice(0, 10) });
+    const agent = h("input", { placeholder: "Clearing agent" });
+    const debit = h("input", { placeholder: "Agent's debit note" });
+    const duty = h("input", { type: "number", inputmode: "decimal", step: "0.01", placeholder: "Duty (all of it)" });
+    const freight = h("input", { type: "number", inputmode: "decimal", step: "0.01", placeholder: "Freight (all of it)" });
+    const fresh = h("div", { class: "stack" }, number, h("label", {}, "Arrived"), arrival, agent, debit, h("div", { class: "row" }, duty, freight));
+    const taken = h("div", { class: "err" });
+    const show = () => {
+      fresh.style.display = pick.value === "new" ? "" : "none";
+      const n = number.value.trim().toUpperCase();
+      taken.textContent = pick.value === "new" && n && choices.some((c) => c.number.toUpperCase() === n) ? "Already used: pick it above instead" : "";
+    };
+    pick.addEventListener("change", show); number.addEventListener("input", show); show();
+    const sheet = sheetWith("Receive " + po.number,
+      h("b", {}, "The consignment it came in"),
+      h("p", { class: "muted small" }, "Required: its duty and freight go into the stock's cost before prices are set. They are shared over the lines by value."),
+      pick, fresh, taken,
       ...rows.map(([l, qty, cost]) => h("div", { class: "card" }, h("b", {}, l.name), h("div", { class: "row" },
         h("div", { class: "grow" }, h("label", {}, "Qty"), qty), h("div", { class: "grow" }, h("label", {}, "Unit cost"), cost)))),
       h("button", { class: "gold full", onclick: async () => {
         const lines = rows.map(([l, qty, cost]) => ({ line_id: l.id, qty: Number(qty.value), unit_cost: Number(cost.value), duty: 0, freight: 0 }));
-        try { await ask("receive_po", { po_id: po.id, lines }, "Delivery of " + po.number + " sent"); sheet.remove(); render("pos"); }
+        const payload = { po_id: po.id, lines };
+        if (pick.value === "new") {
+          const n = number.value.trim().toUpperCase();
+          if (!n) { toast("Give the new consignment its number"); return; }
+          try {
+            if (await api("rpl_mobile_consignment_taken", { p_token: session.token, p_number: n })) { toast("There is already a consignment " + n + ": pick it instead", 4000); return; }
+          } catch (e) { toast(e.message, 4000); return; }
+          payload.new_consignment = { number: n, arrival: arrival.value, agent: agent.value.trim(), debit_note: debit.value.trim(),
+            duty: Number(duty.value) || 0, freight: Number(freight.value) || 0 };
+        } else if (pick.value) {
+          payload.shipment_id = pick.value;
+        } else { toast("Pick the consignment it came in, or a new one"); return; }
+        try { await ask("receive_po", payload, "Delivery of " + po.number + " sent"); sheet.remove(); render("pos"); }
         catch (e) { toast(e.message, 4000); }
       } }, "Send"));
   }
