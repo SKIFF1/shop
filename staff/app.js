@@ -504,9 +504,15 @@
           h("div", { class: "row" }, h("b", { class: "grow" }, po.number + " · " + po.supplier),
             h("span", { class: "pill " + (po.approval === "approved" ? "good" : "warn") }, po.awaiting_receipt ? "delivery waits" : po.approval || po.status)),
           ...lines.map((l) => h("div", { class: "row small" }, h("span", { class: "grow" }, l.qty + " × " + l.name), h("span", { class: "money" }, money(l.qty * l.unit_cost)))),
-          receivable ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null));
+          h("div", { class: "muted small" }, po.shipment ? "Consignment " + po.shipment : "On no consignment"),
+          receivable ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null,
+          h("div", { class: "row" },
+            can("screen:Consignments/New and edit consignments") && po.approval !== "not_approved"
+              ? h("button", { class: "grow", onclick: () => linkConsignment(po) }, "Consignment…") : null,
+            po.shipment_id && can("screen:Consignments")
+              ? h("button", { class: "grow", onclick: () => consignmentReport(po.shipment_id, po.shipment) }, "Consignment report") : null)));
       }
-      const reqs = await requestsCard(["receive_po", "create_po"]); if (reqs) view.append(reqs);
+      const reqs = await requestsCard(["receive_po", "create_po", "link_consignment"]); if (reqs) view.append(reqs);
     },
 
     async count() {
@@ -633,6 +639,50 @@
   };
 
   function back() { return h("button", { class: "full", style: "margin-bottom:10px", onclick: () => render("tools") }, "‹ Tools"); }
+
+  // Which consignment an order comes in: a shop PC moves its deliveries and lots with it.
+  async function linkConsignment(po) {
+    let choices = [];
+    try { choices = await api("rpl_mobile_consignment_choices", { p_token: session.token }); } catch (e) { toast(e.message, 4000); return; }
+    const pick = h("select", {}, h("option", { value: "" }, "No consignment"),
+      ...choices.map((c) => h("option", { value: c.id }, c.number + " · " + String(c.arrival || "").slice(0, 10) + (c.supplier ? " · " + c.supplier : ""))));
+    pick.value = po.shipment_id || "";
+    const sheet = sheetWith(po.number + ": its consignment",
+      h("p", { class: "muted small" }, "Its deliveries and lots move with it, and the consignment's duty and freight are shared over its lines."),
+      pick,
+      h("button", { class: "gold full", onclick: async () => {
+        if (pick.value === (po.shipment_id || "")) { sheet.remove(); return; }
+        const number = pick.value ? pick.options[pick.selectedIndex].text.split(" · ")[0] : "";
+        try {
+          await ask("link_consignment", { po_id: po.id, shipment_id: pick.value }, number ? po.number + ": putting it on " + number : po.number + ": taking it off its consignment");
+          sheet.remove(); render("pos");
+        } catch (e) { toast(e.message, 4000); }
+      } }, "Send"));
+  }
+
+  // A consignment from start to now, as a shop PC's Consignment Report.
+  async function consignmentReport(id, number) {
+    let r;
+    try { r = await api("rpl_mobile_consignment_report", { p_token: session.token, p_shipment_id: id }); } catch (e) { toast(e.message, 4000); return; }
+    const sum = (k) => r.rows.reduce((t, row) => t + (row[k] || 0), 0);
+    const kids = [h("div", { class: "muted small" }, [r.supplier, "arrived " + String(r.arrival || "").slice(0, 10)].filter(Boolean).join(" · ")),
+      h("div", { class: "small" }, r.orders.length ? "Orders " + r.orders.join(", ") : "No purchase orders on it yet")];
+    if (r.money) {
+      const landed = sum("landed"), taken = sum("revenue"), margin = taken - sum("cost_of_sold");
+      kids.push(
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Landed (duty " + money(r.duty) + ", freight " + money(r.freight) + ")"), h("b", {}, money(landed))),
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Taken from sales"), h("b", {}, money(taken))),
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Margin on what sold"), h("b", {}, money(margin))),
+        h("div", { class: "row" }, h("span", { class: "grow muted" }, "Still on the shelf"), h("b", {}, money(sum("value_left")))),
+        h("div", { class: "small " + (taken >= landed ? "good" : "warn") }, taken >= landed ? "Paid for itself: " + money(taken - landed) + " over its landed cost" : money(landed - taken) + " still to take before it has paid for itself"));
+    }
+    for (const row of r.rows) {
+      kids.push(h("div", { class: "card" }, h("b", {}, row.name || row.sku),
+        h("div", { class: "small" }, "Ordered " + row.ordered + " · received " + row.received + " · sold " + row.sold + (row.written_off ? " · written off " + row.written_off : "") + " · left " + row.left),
+        r.money ? h("div", { class: "muted small" }, "Landed " + money(row.received ? row.landed / row.received : 0) + " each · took " + money(row.revenue) + " · margin " + money(row.revenue - row.cost_of_sold)) : null));
+    }
+    sheetWith((number || r.number) + ": report", ...kids);
+  }
 
   function sheetWith(title, ...kids) {
     const sheet = h("div", { class: "sheet", onclick: (e) => { if (e.target === sheet) sheet.remove(); } });
