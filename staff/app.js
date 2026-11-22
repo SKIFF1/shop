@@ -83,7 +83,7 @@
     if (!session) return false;
     if (Array.isArray(session.permissions)) return session.permissions.includes(key);
     if (session.role === "admin") return true;
-    return session.role === "sales_person" && ["take_payments", "give_discounts", "screen:Sales Order", "screen:Web Orders"].includes(key);
+    return session.role === "sales_person" && ["take_payments", "give_discounts", "record_expenses", "screen:Sales Order", "screen:Web Orders"].includes(key);
   }
   const cart = { lines: [], customer: { name: "", phone: "", email: "", address: "" }, delivery: 0, discount: 0, request: null };
 
@@ -98,11 +98,38 @@
     ["sell", "🛒", "Sell", () => can("screen:Sales Order")],
     ["orders", "📋", "Orders", () => can("screen:Sales Order")],
     ["web", "🌐", "Web orders", () => can("screen:Web Orders")],
-    ["reports", "📊", "Reports", () => can("screen:Reports")],
-    ["photos", "📷", "Photos", isAdmin],
+    ["reports", "📊", "Reports", () => can("screen:Reports") || can("sales_report")],
+    ["tools", "🧰", "Tools", () => TOOLS.some(([, , , ok]) => ok())],
+    ["photos", "📷", "Photos", () => can("screen:Inventory") && !TOOLS.some(([, , , ok]) => ok())],
     ["more", "⚙️", "More", () => true],
   ];
+  // Approvals, purchase orders, counts, stock and expenses, as on the
+  // Android app: each follows this person's permissions.
+  const TOOLS = [
+    ["approvals", "✅", "Approvals", () => ["approve_purchase_orders", "approve_stock", "approve_write_offs"].some(can)],
+    ["pos", "🚚", "Purchase orders", () => can("screen:Purchase Orders")],
+    ["count", "📋", "Stock take", () => can("screen:Stock Take")],
+    ["lookup", "🔎", "Stock lookup", () => can("screen:Sales Order") || can("screen:Inventory")],
+    ["expense", "💸", "Record expense", () => can("record_expenses")],
+    ["photos", "📷", "Product photos", () => can("screen:Inventory")],
+  ];
+  const REQUEST_LABEL = { approve_po: "Purchase order approval", approve_receipt: "Stock approval", approve_journal: "Count / write-off approval",
+    stock_take: "Stock take", receive_po: "Delivery received", create_po: "New purchase order", record_expense: "Expense", change_price: "Price change" };
   let current = "sell";
+
+  // Work a shop PC carries out (as the person who asked), within a minute.
+  async function ask(kind, payload, sent) {
+    await api("rpl_mobile_request", { p_token: session.token, p_kind: kind, p_branch: branch, p_payload: payload });
+    toast(sent + ". A shop PC carries it out within a minute.", 4000);
+  }
+  async function requestsCard(kinds) {
+    const all = await api("rpl_mobile_requests", { p_token: session.token }).catch(() => []);
+    const shown = (all || []).filter((r) => !kinds || kinds.includes(r.kind)).slice(0, 10);
+    if (!shown.length) return null;
+    return h("div", {}, h("h2", {}, "Requests"), h("div", { class: "card list" }, shown.map((r) => h("div", { class: "item" },
+      h("div", { class: "grow" }, h("div", {}, REQUEST_LABEL[r.kind] || r.kind), h("div", { class: "muted" }, r.result || new Date(r.created_at).toLocaleString())),
+      h("span", { class: "pill " + (r.status === "done" ? "good" : r.status === "failed" ? "bad" : "warn") }, r.status)))));
+  }
 
   function chrome() {
     const signedIn = !!session;
@@ -111,7 +138,8 @@
     const tabs = $("tabs"); tabs.textContent = "";
     for (const [key, icon, label, allowed] of TABS) {
       if (!allowed()) continue;
-      tabs.append(h("button", { class: key === current ? "on" : "", onclick: () => render(key) }, h("span", { class: "i" }, icon), label));
+      const on = key === current || (key === "tools" && TOOLS.some(([k]) => k === current) && !TABS.some(([t, , , ok]) => t === current && ok()));
+      tabs.append(h("button", { class: on ? "on" : "", onclick: () => render(key) }, h("span", { class: "i" }, icon), label));
     }
     const select = $("branch"); select.textContent = "";
     for (const b of session.branches) select.append(h("option", { value: b.code }, b.code + " · " + b.name));
@@ -294,7 +322,8 @@
       view.append(h("h1", {}, "Reports"));
       const seg = h("div", { class: "seg" });
       const box = h("div");
-      const periods = [["today", "Today"], ["week", "This week"], ["month", "This month"], ["year", "This year"]];
+      const full = can("screen:Reports");
+      const periods = [["today", "Today"], ["week", "This week"], ["month", "This month"]].concat(full ? [["year", "This year"]] : []);
       let period = "today";
       async function show() {
         seg.textContent = ""; box.textContent = "Loading…";
@@ -303,10 +332,27 @@
           const r = await api("rpl_mobile_report", { p_token: session.token, p_branch: branch, p_period: period, p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone });
           box.textContent = "";
           const stat = (label, value) => h("div", { class: "card" }, h("span", { class: "muted" }, label), h("b", {}, value));
+          const me = r.me;
+          if (me && (!full || me.invoices > 0)) {
+            const pct = (a, b) => (b ? Math.round((a - b) / b * 1000) / 10 : null);
+            const change = pct(me.sales, me.previous);
+            box.append(h("div", { class: "card" }, h("span", { class: "muted" }, "Your sales"),
+              h("div", { class: "total" }, h("span", {}, money(me.sales - me.returns)),
+                change === null ? null : h("span", { class: "pill " + (change >= 0 ? "good" : "bad") }, (change >= 0 ? "▲ " : "▼ ") + Math.abs(change) + "%")),
+              r.sales > 0 ? h("div", { class: "muted" }, Math.round(me.sales / r.sales * 100) + "% of the branch's sales") : null),
+              h("div", { class: "stat" }, stat("Sales made", me.invoices), stat("Average sale", money(me.invoices ? me.sales / me.invoices : 0)),
+                stat("Payments you took", money(me.payments_taken)), stat("Returned", money(me.returns))));
+            if ((me.top_products || []).length) {
+              box.append(h("h2", {}, "What you sold"), h("div", { class: "card list" },
+                me.top_products.map((p) => h("div", { class: "item" }, h("span", { class: "grow" }, p.units + " × " + p.name), h("span", { class: "money" }, money(p.revenue))))));
+            }
+            box.append(h("h2", {}, full ? "The whole picture" : "Your branch"));
+          }
+          const has = (v) => v !== null && v !== undefined;
           box.append(h("div", { class: "stat" },
             stat("Sales", money(r.sales)), stat("Net revenue", money(r.net_revenue)),
-            stat("Gross profit", money(r.gross_profit)), stat("Net profit", money(r.net_profit)),
-            stat("Invoices", r.invoices), stat("Expenses", money(r.expenses)),
+            has(r.gross_profit) ? stat("Gross profit", money(r.gross_profit)) : null, has(r.net_profit) ? stat("Net profit", money(r.net_profit)) : null,
+            stat("Invoices", r.invoices), has(r.expenses) ? stat("Expenses", money(r.expenses)) : null,
             r.balances ? stat("Cash at hand", money(r.balances.cash_at_hand)) : null,
             r.owed ? stat("Owed to you", money(r.owed.total)) : null));
           if ((r.payment_mix || []).length) {
@@ -324,6 +370,7 @@
     },
 
     async photos() {
+      if (TOOLS.some(([k, , , ok]) => k !== "photos" && ok())) view.append(back());
       view.append(h("h1", {}, "Product photos"), h("p", { class: "muted" }, "A clear photo on a plain background, in good light, sells best."));
       const products = await api("rpl_mobile_photo_products", { p_token: session.token, p_branch: branch });
       const list = h("div", { class: "card list" });
@@ -343,6 +390,146 @@
           h("button", { onclick: () => file.click() }, "Photo"), file));
       }
       view.append(list);
+    },
+
+    tools() {
+      view.append(h("h1", {}, "Tools"));
+      const list = h("div", { class: "card list" });
+      for (const [key, icon, label, ok] of TOOLS) {
+        if (!ok()) continue;
+        list.append(h("div", { class: "item", onclick: () => render(key) }, h("div", { class: "thumb" }, icon), h("div", { class: "grow" }, label), h("span", { class: "muted" }, "›")));
+      }
+      view.append(list);
+    },
+
+    async approvals() {
+      view.append(back(), h("h1", {}, "Approvals"));
+      const found = await api("rpl_mobile_approvals", { p_token: session.token, p_branch: branch });
+      const items = [];
+      for (const po of found.purchase_orders || []) items.push(["approve_po", "po_id", po, "Order from " + po.supplier, (l) => l.qty * l.unit_cost]);
+      for (const r of found.receipts || []) items.push(["approve_receipt", "receipt_id", r, "Delivery from " + r.supplier + (r.po_number ? " · " + r.po_number : ""), (l) => l.qty * (l.landed || 0)]);
+      for (const j of found.journals || []) items.push(["approve_journal", "journal_id", j, String(j.reason || "").replace(/_/g, " ") + (j.note ? ": " + j.note : ""), (l) => l.qty * l.unit_cost]);
+      if (!items.length) view.append(h("div", { class: "card muted" }, "Nothing waits for you."));
+      for (const [kind, key, it, title, worth] of items) {
+        const lines = it.lines || [];
+        const card = h("div", { class: "card" },
+          h("div", { class: "row" }, h("b", { class: "grow" }, it.number), it.asked ? h("span", { class: "pill warn" }, "sent") : null),
+          h("div", {}, title), h("div", { class: "muted" }, [it.by, it.created_at && new Date(it.created_at).toLocaleString()].filter(Boolean).join(" · ")),
+          ...lines.map((l) => h("div", { class: "row small" }, h("span", { class: "grow" }, l.qty + " × " + l.name), h("span", { class: "money" }, money(worth(l))))),
+          h("div", { class: "total" }, h("span", {}, "Value"), h("span", {}, money(lines.reduce((s, l) => s + worth(l), 0)))));
+        if (!it.asked) {
+          const decide = async (approve) => {
+            const note = approve ? "" : prompt("Why not?");
+            if (!approve && !note) return;
+            try { await ask(kind, { [key]: it.id, decision: approve ? "approve" : "reject", note }, it.number + (approve ? " approval" : " rejection") + " sent"); render("approvals"); }
+            catch (e) { toast(e.message, 4000); }
+          };
+          card.append(h("div", { class: "row" }, h("button", { class: "primary grow", onclick: () => decide(true) }, "Approve"),
+            h("button", { class: "danger", onclick: () => decide(false) }, "Reject")));
+        }
+        view.append(card);
+      }
+      const reqs = await requestsCard(["approve_po", "approve_receipt", "approve_journal"]); if (reqs) view.append(reqs);
+    },
+
+    async pos() {
+      view.append(back(), h("h1", {}, "Purchase orders"), h("button", { class: "primary full", onclick: newOrder }, "New purchase order"), h("div", { style: "height:10px" }));
+      const orders = await api("rpl_mobile_purchase_orders", { p_token: session.token, p_branch: branch });
+      if (!orders.length) view.append(h("div", { class: "card muted" }, "No open orders."));
+      for (const po of orders) {
+        const lines = po.lines || [];
+        const receivable = po.status === "ordered" && po.approval === "approved" && !po.awaiting_receipt;
+        view.append(h("div", { class: "card" },
+          h("div", { class: "row" }, h("b", { class: "grow" }, po.number + " · " + po.supplier),
+            h("span", { class: "pill " + (po.approval === "approved" ? "good" : "warn") }, po.awaiting_receipt ? "delivery waits" : po.approval || po.status)),
+          ...lines.map((l) => h("div", { class: "row small" }, h("span", { class: "grow" }, l.qty + " × " + l.name), h("span", { class: "money" }, money(l.qty * l.unit_cost)))),
+          receivable ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null));
+      }
+      const reqs = await requestsCard(["receive_po", "create_po"]); if (reqs) view.append(reqs);
+    },
+
+    async count() {
+      view.append(back(), h("h1", {}, "Stock take"), h("p", { class: "muted" }, "Type what is on the shelf. A shop PC raises the count for approval; nothing moves until it is approved."));
+      const items = await api("rpl_mobile_count_items", { p_token: session.token, p_branch: branch });
+      const counted = {};
+      const search = h("input", { type: "search", placeholder: "Find a product, SKU or barcode" });
+      const list = h("div", { class: "card list" });
+      const send = h("button", { class: "gold full" }, "Send the count");
+      function show() {
+        const q = search.value.trim().toLowerCase();
+        list.textContent = "";
+        for (const it of items.filter((i) => !q || i.name.toLowerCase().includes(q) || i.sku.toLowerCase().includes(q) || i.barcode === q).slice(0, 60)) {
+          const box = h("input", { type: "number", inputmode: "decimal", min: "0", step: "1", value: counted[it.id] ?? "", style: "width:90px", "aria-label": "Counted " + it.name });
+          box.addEventListener("input", () => { if (box.value === "") delete counted[it.id]; else counted[it.id] = Number(box.value); label(); });
+          list.append(h("div", { class: "item" }, h("div", { class: "grow" }, h("div", {}, it.name), h("div", { class: "muted" }, it.sku + " · books say " + it.on_hand)), box));
+        }
+      }
+      function label() { send.textContent = "Send the count (" + Object.keys(counted).length + ")"; }
+      send.addEventListener("click", async () => {
+        const counts = Object.entries(counted).map(([item_id, n]) => ({ item_id, counted: n }));
+        if (!counts.length) { toast("Count something first"); return; }
+        try { await ask("stock_take", { counts }, "Count of " + counts.length + " product(s) sent"); render("count"); } catch (e) { toast(e.message, 4000); }
+      });
+      search.addEventListener("input", show);
+      view.append(search, h("div", { style: "height:8px" }), list, send);
+      show(); label();
+      const reqs = await requestsCard(["stock_take"]); if (reqs) view.append(reqs);
+    },
+
+    async lookup() {
+      view.append(back(), h("h1", {}, "Stock lookup"));
+      const mayPrice = can("change_prices");
+      const search = h("input", { type: "search", placeholder: "Name, SKU or barcode (2 letters or more)" });
+      const box = h("div");
+      async function find() {
+        if (search.value.trim().length < 2) return;
+        box.textContent = "Looking…";
+        try {
+          const lines = await api("rpl_mobile_stock_lookup", { p_token: session.token, p_query: search.value.trim() });
+          box.textContent = "";
+          if (!lines.length) box.append(h("div", { class: "card muted" }, "Nothing matches."));
+          for (const l of lines) {
+            const margin = l.cost !== null && l.cost !== undefined && l.price > 0 ? Math.round((l.price - l.cost) / l.price * 1000) / 10 : null;
+            box.append(h("div", { class: "card", onclick: mayPrice ? () => price(l, find) : null },
+              h("div", { class: "row" }, h("b", { class: "grow" }, l.name), h("span", { class: "money" }, money(l.price))),
+              h("div", { class: "muted" }, l.branch + " · " + l.sku),
+              h("div", {}, "On hand " + l.on_hand + (l.held > 0 ? " · held " + l.held : "") + (l.on_order > 0 ? " · on order " + l.on_order : "")),
+              margin !== null ? h("div", { class: "muted" }, "Cost " + money(l.cost) + " · margin " + margin + "%" + (l.target ? " · target " + l.target + "%" : "")) : null,
+              mayPrice ? h("div", { class: "muted" }, "Tap to change the price") : null));
+          }
+        } catch (e) { box.textContent = ""; box.append(h("div", { class: "card err" }, e.message)); }
+      }
+      search.addEventListener("keydown", (e) => { if (e.key === "Enter") find(); });
+      view.append(h("div", { class: "row" }, h("div", { class: "grow" }, search), h("button", { class: "primary", onclick: find }, "Find")), h("div", { style: "height:8px" }), box);
+      if (mayPrice) { const reqs = await requestsCard(["change_price"]); if (reqs) view.append(reqs); }
+    },
+
+    async expense() {
+      view.append(back(), h("h1", {}, "Record an expense"));
+      const types = ["Rent", "Transport", "Advertising", "Wages", "Airtime", "Electricity", "Other"];
+      const type = h("select", {}, types.map((t) => h("option", { value: t }, t)));
+      const other = h("input", { placeholder: "What it was", hidden: true });
+      type.addEventListener("change", () => { other.hidden = type.value !== "Other"; });
+      const amount = h("input", { type: "number", inputmode: "decimal", min: "0", step: "0.01", placeholder: "0.00" });
+      const paid = h("select", {}, [["cash", "Cash (till)"], ["bank", "Bank"], ["ecocash", "EcoCash"], ["other", "Other"]].map(([k, v]) => h("option", { value: k }, v)));
+      const note = h("input", { placeholder: "Optional" });
+      const file = h("input", { type: "file", accept: "image/*", capture: "environment" });
+      const go = h("button", { class: "gold full" }, "Send");
+      go.addEventListener("click", async () => {
+        const what = type.value === "Other" ? other.value.trim() : type.value;
+        const value = Number(amount.value);
+        if (!what || !(value > 0)) { toast("Say what it was for and how much"); return; }
+        go.disabled = true;
+        try {
+          const photo = file.files[0] ? await shrink(file.files[0], 1400, 0.75) : "";
+          await ask("record_expense", { type: what, amount: value, paid_with: paid.value, note: note.value.trim(), photo },
+            what + " " + money(value) + " sent" + (photo ? " with its receipt" : ""));
+          render("expense");
+        } catch (e) { toast(e.message, 4000); go.disabled = false; }
+      });
+      view.append(h("div", { class: "card stack" }, h("label", {}, "What for"), type, other, h("label", {}, "Amount (USD)"), amount,
+        h("label", {}, "Paid with"), paid, h("label", {}, "Note"), note, h("label", {}, "Photo of the receipt or slip"), file, go));
+      const reqs = await requestsCard(["record_expense"]); if (reqs) view.append(reqs);
     },
 
     async more() {
@@ -369,6 +556,68 @@
       view.append(h("p", { class: "muted small" }, "EcoCash and InnBucks prompts and pay links: use a shop PC or the Android app. Payments taken there show here."));
     },
   };
+
+  function back() { return h("button", { class: "full", style: "margin-bottom:10px", onclick: () => render("tools") }, "‹ Tools"); }
+
+  function sheetWith(title, ...kids) {
+    const sheet = h("div", { class: "sheet", onclick: (e) => { if (e.target === sheet) sheet.remove(); } });
+    sheet.append(h("div", { class: "panel stack" }, h("h2", {}, title), ...kids, h("button", { class: "full", onclick: () => sheet.remove() }, "Cancel")));
+    document.body.append(sheet);
+    return sheet;
+  }
+
+  function price(l, again) {
+    const box = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: Number(l.price).toFixed(2) });
+    const hint = h("div", { class: "muted" });
+    const update = () => {
+      const p = Number(box.value);
+      hint.textContent = l.cost !== null && l.cost !== undefined && p > 0 ? "Margin " + Math.round((p - l.cost) / p * 1000) / 10 + "%" + (p < l.cost ? " — below cost" : "") : "";
+    };
+    box.addEventListener("input", update); update();
+    const suggest = l.cost > 0 && l.target > 0 ? Math.ceil(l.cost / (1 - l.target / 100) / 0.5 - 1e-9) * 0.5 : null;
+    const sheet = sheetWith("New price · " + l.name, h("div", { class: "muted" }, l.branch + ", now " + money(l.price)), box, hint,
+      suggest ? h("button", { class: "full", onclick: () => { box.value = suggest.toFixed(2); update(); } }, "Use " + money(suggest) + " (the target margin)") : null,
+      h("button", { class: "gold full", onclick: async () => {
+        const p = Number(box.value);
+        if (!(p > 0)) return;
+        try { await ask("change_price", { item_id: l.id, price: p }, l.name + ": new price " + money(p) + " sent"); sheet.remove(); again(); }
+        catch (e) { toast(e.message, 4000); }
+      } }, "Send"));
+  }
+
+  function receive(po) {
+    const rows = (po.lines || []).map((l) => {
+      const qty = h("input", { type: "number", inputmode: "decimal", value: l.qty });
+      const cost = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: l.unit_cost });
+      return [l, qty, cost];
+    });
+    const sheet = sheetWith("Receive " + po.number, h("p", { class: "muted small" }, "What arrived, at what cost. Duty and freight can be added on a PC. A shop PC raises it for approval."),
+      ...rows.map(([l, qty, cost]) => h("div", { class: "card" }, h("b", {}, l.name), h("div", { class: "row" },
+        h("div", { class: "grow" }, h("label", {}, "Qty"), qty), h("div", { class: "grow" }, h("label", {}, "Unit cost"), cost)))),
+      h("button", { class: "gold full", onclick: async () => {
+        const lines = rows.map(([l, qty, cost]) => ({ line_id: l.id, qty: Number(qty.value), unit_cost: Number(cost.value), duty: 0, freight: 0 }));
+        try { await ask("receive_po", { po_id: po.id, lines }, "Delivery of " + po.number + " sent"); sheet.remove(); render("pos"); }
+        catch (e) { toast(e.message, 4000); }
+      } }, "Send"));
+  }
+
+  function newOrder() {
+    const supplier = h("input", { placeholder: "Supplier" });
+    const lines = h("div");
+    const addLine = () => lines.append(h("div", { class: "card stack" },
+      h("input", { placeholder: "SKU", class: "sku" }), h("input", { placeholder: "Product name", class: "name" }),
+      h("div", { class: "row" }, h("input", { type: "number", inputmode: "decimal", placeholder: "Qty", class: "qty" }),
+        h("input", { type: "number", inputmode: "decimal", step: "0.01", placeholder: "Unit cost", class: "cost" }))));
+    addLine();
+    const sheet = sheetWith("New purchase order", supplier, lines, h("button", { class: "full", onclick: addLine }, "Another line"),
+      h("button", { class: "gold full", onclick: async () => {
+        const got = [...lines.children].map((c) => ({ sku: c.querySelector(".sku").value.trim(), name: c.querySelector(".name").value.trim(),
+          qty: Number(c.querySelector(".qty").value), unit_cost: Number(c.querySelector(".cost").value) || 0 })).filter((l) => l.sku && l.name && l.qty > 0);
+        if (!supplier.value.trim() || !got.length) { toast("Give the supplier and at least one line"); return; }
+        try { await ask("create_po", { supplier: supplier.value.trim(), funding: "working_capital", paid_with: "", lines: got }, "New order for " + supplier.value.trim() + " sent"); sheet.remove(); render("pos"); }
+        catch (e) { toast(e.message, 4000); }
+      } }, "Send"));
+  }
 
   // --- an order, and taking payment on it ---
   function orderCard(o) {
