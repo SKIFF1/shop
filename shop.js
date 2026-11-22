@@ -422,6 +422,61 @@
     }
   }
 
+  // --- The receipt, after paying a pay link ---
+  // Paynow sends the customer back here with the payment's reference and
+  // a seal (rpl_web_receipt): the order they paid for, and whether Paynow
+  // has confirmed it yet. Until it has, asked again every few seconds.
+
+  async function showReceipt(reference, seal) {
+    const box = $("receipt");
+    box.hidden = false;
+    box.scrollIntoView({ behavior: "smooth" });
+    const started = Date.now();
+    const money2 = (n) => "$" + Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    for (;;) {
+      let r;
+      try {
+        r = await rpc("rpl_web_receipt", { p_reference: reference, p_seal: seal });
+      } catch (e) {
+        $("receipt-state").textContent = "Receipt";
+        $("receipt-title").textContent = "We couldn't open this receipt";
+        $("receipt-note").textContent = e.message;
+        return;
+      }
+      $("receipt-title").textContent = r.paid ? "Paid. Thank you" + (r.customer ? ", " + r.customer.split(" ")[0] : "") + "!" : "Thank you";
+      $("receipt-meta").textContent = [r.shop, "Order " + r.order_number, r.invoice_number ? "Invoice " + r.invoice_number : ""]
+        .filter(Boolean).join(" · ");
+      const list = $("receipt-lines");
+      list.textContent = "";
+      for (const l of r.lines || []) {
+        const li = document.createElement("li");
+        const what = document.createElement("span"); what.textContent = l.qty + " × " + l.name;
+        const cost = document.createElement("span"); cost.textContent = money2(l.line_total);
+        li.append(what, cost); list.append(li);
+      }
+      $("receipt-total").textContent = "Paid " + money2(r.amount) + (r.paynow_reference ? " · Paynow ref " + r.paynow_reference : "")
+        + (r.balance > 0.004 ? " · still owed " + money2(r.balance) : "");
+      if (r.paid) {
+        $("receipt-state").textContent = "Payment confirmed";
+        $("receipt-note").textContent = (r.email ? "Your invoice is on its way to your email. " : "")
+          + "We'll be in touch about collection or delivery. Keep this page as your receipt.";
+        return;
+      }
+      if (r.status === "failed" || r.status === "cancelled") {
+        $("receipt-state").textContent = "Not paid";
+        $("receipt-note").textContent = "Paynow didn't take this payment. Nothing was charged; please contact us to try again.";
+        return;
+      }
+      $("receipt-state").textContent = "Waiting for Paynow to confirm…";
+      $("receipt-note").textContent = "This usually takes under a minute. This page checks by itself.";
+      if (Date.now() - started > 180000) {
+        $("receipt-note").textContent = "Paynow hasn't confirmed it yet. If you paid, it will reach us: keep your Paynow reference, and we'll confirm.";
+        return;
+      }
+      await new Promise((done) => setTimeout(done, 5000));
+    }
+  }
+
   // --- Start ---
 
   async function load() {
@@ -457,4 +512,6 @@
   watchReveals();
   requestAnimationFrame(() => document.body.classList.add("ready")); // the hero rises in
   load();
+  const landed = new URLSearchParams(location.search);
+  if (landed.get("receipt") && landed.get("s")) showReceipt(landed.get("receipt"), landed.get("s"));
 })();

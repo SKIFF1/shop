@@ -271,13 +271,14 @@
   const TOOLS = [
     ["approvals", "✅", "Approvals", () => ["approve_purchase_orders", "approve_stock", "approve_write_offs"].some(can)],
     ["pos", "🚚", "Purchase orders", () => can("screen:Purchase Orders/Orders")],
+    ["consignments", "✈️", "Consignments", () => can("screen:Consignments")],
     ["count", "📋", "Stock take", () => can("screen:Stock Take/Count and send for approval")],
     ["lookup", "🔎", "Stock lookup", () => can("screen:Sales Order") || can("screen:Inventory")],
     ["expense", "💸", "Record expense", () => can("record_expenses")],
     ["photos", "📷", "Product photos", () => can("screen:Inventory")],
   ];
   const REQUEST_LABEL = { approve_po: "Purchase order approval", approve_receipt: "Stock approval", approve_journal: "Count / write-off approval",
-    stock_take: "Stock take", receive_po: "Delivery received", create_po: "New purchase order", record_expense: "Expense", change_price: "Price change" };
+    stock_take: "Stock take", receive_po: "Delivery received", create_po: "New purchase order", record_expense: "Expense", change_price: "Price change", create_consignment: "New consignment", consignment_orders: "A consignment's orders" };
   let current = "sell";
 
   // Work a shop PC carries out (as the person who asked), within a minute.
@@ -629,15 +630,33 @@
             h("span", { class: "pill " + (po.approval === "approved" ? "good" : "warn") }, po.awaiting_receipt ? "delivery waits" : po.approval || po.status)),
           ...lines.map((l) => h("div", { class: "row small" }, h("span", { class: "grow" }, l.qty + " × " + l.name), h("span", { class: "money" }, money(l.qty * l.unit_cost)))),
           h("div", { class: "small " + (po.shipment ? "muted" : receivable ? "warn" : "muted") },
-            po.shipment ? "Consignment " + po.shipment : receivable ? "On no consignment yet: receiving asks which, so its duty and freight are in its cost" : "On no consignment"),
-          receivable ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null,
-          h("div", { class: "row" },
-            can("screen:Consignments/New and edit consignments") && po.approval !== "not_approved"
-              ? h("button", { class: "grow", onclick: () => linkConsignment(po) }, "Consignment…") : null,
-            po.shipment_id && can("screen:Consignments")
-              ? h("button", { class: "grow", onclick: () => consignmentReport(po.shipment_id, po.shipment) }, "Consignment report") : null)));
+            po.shipment ? "Consignment " + po.shipment : receivable ? "On no consignment: add it from Consignments → its consignment → Orders…, then receive it" : "On no consignment"),
+          // Consignment first: received once it is on its consignment.
+          receivable && po.shipment ? h("button", { class: "gold full", onclick: () => receive(po) }, "Receive") : null,
+          po.shipment_id && can("screen:Consignments")
+            ? h("button", { class: "full", onclick: () => consignmentReport(po.shipment_id, po.shipment) }, "Consignment report") : null));
       }
-      const reqs = await requestsCard(["receive_po", "create_po", "link_consignment"]); if (reqs) view.append(reqs);
+      const reqs = await requestsCard(["receive_po", "create_po"]); if (reqs) view.append(reqs);
+    },
+
+    // Consignment first: record it, add its purchase orders, then receive them.
+    async consignments() {
+      const mayEdit = can("screen:Consignments/New and edit consignments");
+      view.append(back(), h("h1", {}, "Consignments"),
+        mayEdit ? h("button", { class: "primary full", onclick: newConsignment }, "+ New consignment") : null, h("div", { style: "height:10px" }));
+      const list = await api("rpl_mobile_consignments", { p_token: session.token });
+      if (!list.length) view.append(h("div", { class: "card muted" }, "No consignments yet."));
+      for (const c of list) {
+        view.append(h("div", { class: "card" },
+          h("div", { class: "row" }, h("b", { class: "grow" }, c.number), h("span", { class: "muted small" }, String(c.arrived || "").slice(0, 10))),
+          h("div", { class: "muted small" }, [c.supplier, c.debit_note && "debit note " + c.debit_note].filter(Boolean).join(" · ")),
+          h("div", { class: "small " + ((c.orders || []).length ? "" : "warn") },
+            (c.orders || []).length ? "Orders " + c.orders.map((o) => o.number).join(", ") : "No purchase orders on it yet"),
+          h("div", { class: "row" },
+            mayEdit ? h("button", { class: "grow", onclick: () => consignmentOrders(c) }, "Orders…") : null,
+            h("button", { class: "grow", onclick: () => consignmentReport(c.id, c.number) }, "Report"))));
+      }
+      const reqs = await requestsCard(["create_consignment", "consignment_orders"]); if (reqs) view.append(reqs);
     },
 
     async count() {
@@ -770,23 +789,45 @@
 
   function back() { return h("button", { class: "full", style: "margin-bottom:10px", onclick: () => render("tools") }, "‹ Tools"); }
 
-  // Which consignment an order comes in: a shop PC moves its deliveries and lots with it.
-  async function linkConsignment(po) {
-    let choices = [];
-    try { choices = await api("rpl_mobile_consignment_choices", { p_token: session.token }); } catch (e) { toast(e.message, 4000); return; }
-    const pick = h("select", {}, h("option", { value: "" }, "No consignment"),
-      ...choices.map((c) => h("option", { value: c.id }, c.number + " · " + String(c.arrival || "").slice(0, 10) + (c.supplier ? " · " + c.supplier : ""))));
-    pick.value = po.shipment_id || "";
-    const sheet = sheetWith(po.number + ": its consignment",
-      h("p", { class: "muted small" }, "Its deliveries and lots move with it, and the consignment's duty and freight are shared over its lines."),
-      pick,
+  // A new consignment, recorded by a shop PC (never a number already used).
+  async function newConsignment() {
+    const f = (placeholder, type) => h("input", Object.assign({ placeholder }, type ? { type, inputmode: "decimal", step: "0.01" } : {}));
+    const number = f("Consignment number"), supplier = f("Supplier"), agent = f("Clearing agent"), debit = f("Agent's debit note"),
+      boe = f("Bill of entry"), duty = f("Duty (all of it)", "number"), freight = f("Freight and clearing (all of it)", "number");
+    const arrival = h("input", { type: "date", value: new Date().toISOString().slice(0, 10) });
+    const sheet = sheetWith("New consignment", number, h("label", {}, "Arrived"), arrival, supplier, agent, debit, boe, duty, freight,
+      h("p", { class: "muted small" }, "Its duty and freight are shared over its purchase orders by value. Add them next with Orders…."),
       h("button", { class: "gold full", onclick: async () => {
-        if (pick.value === (po.shipment_id || "")) { sheet.remove(); return; }
-        const number = pick.value ? pick.options[pick.selectedIndex].text.split(" · ")[0] : "";
+        const n = number.value.trim().toUpperCase();
+        if (!n) { toast("Give the consignment its number"); return; }
         try {
-          await ask("link_consignment", { po_id: po.id, shipment_id: pick.value }, number ? po.number + ": putting it on " + number : po.number + ": taking it off its consignment");
-          sheet.remove(); render("pos");
+          if (await api("rpl_mobile_consignment_taken", { p_token: session.token, p_number: n })) { toast("There is already a consignment " + n, 4000); return; }
+          await ask("create_consignment", { number: n, arrival: arrival.value, supplier: supplier.value.trim(), agent: agent.value.trim(),
+            debit_note: debit.value.trim(), boe: boe.value.trim(), duty: Number(duty.value) || 0, freight: Number(freight.value) || 0 }, "Consignment " + n + " sent");
+          sheet.remove(); render("consignments");
         } catch (e) { toast(e.message, 4000); }
+      } }, "Send"));
+  }
+
+  // The purchase orders a consignment brings: those ticked go on it, the others come off.
+  async function consignmentOrders(c) {
+    let orders = [];
+    try { orders = await api("rpl_mobile_purchase_orders", { p_token: session.token, p_branch: branch }); } catch (e) { toast(e.message, 4000); return; }
+    const choices = orders.filter((o) => o.approval !== "not_approved" && (!o.shipment_id || o.shipment_id === c.id));
+    const elsewhere = (c.orders || []).filter((o) => !choices.some((x) => x.id === o.id));
+    const on = new Set((c.orders || []).map((o) => o.id));
+    const row = (id, label) => {
+      const box = h("input", { type: "checkbox" }); box.checked = on.has(id);
+      box.addEventListener("change", () => { if (box.checked) on.add(id); else on.delete(id); });
+      return h("label", { class: "row" }, box, h("span", { class: "grow" }, label));
+    };
+    const sheet = sheetWith(c.number + ": its purchase orders",
+      ...choices.map((o) => row(o.id, o.number + " · " + o.supplier)),
+      ...elsewhere.map((o) => row(o.id, o.number + " (another branch)")),
+      !choices.length && !elsewhere.length ? h("div", { class: "muted" }, "No purchase orders to add at " + branch + ".") : null,
+      h("button", { class: "gold full", onclick: async () => {
+        try { await ask("consignment_orders", { shipment_id: c.id, order_ids: [...on] }, c.number + ": its orders sent"); sheet.remove(); render("consignments"); }
+        catch (e) { toast(e.message, 4000); }
       } }, "Send"));
   }
 
@@ -842,55 +883,21 @@
       } }, "Send"));
   }
 
-  // A delivery and the consignment it came in: the order's, another current
-  // one, or a new one a shop PC records first (never a number already used).
-  async function receive(po) {
-    let choices = [];
-    try { choices = await api("rpl_mobile_consignment_choices", { p_token: session.token }); } catch (e) { choices = []; }
+  // A delivery, into the order's consignment (consignment first: put on it from the consignment).
+  function receive(po) {
     const rows = (po.lines || []).map((l) => {
       const qty = h("input", { type: "number", inputmode: "decimal", value: l.qty });
       const cost = h("input", { type: "number", inputmode: "decimal", step: "0.01", value: l.unit_cost });
       return [l, qty, cost];
     });
-    const pick = h("select", {}, h("option", { value: "" }, "Pick the consignment it came in"),
-      ...choices.map((c) => h("option", { value: c.id }, c.number + " · " + String(c.arrival || "").slice(0, 10) + (c.supplier ? " · " + c.supplier : ""))),
-      h("option", { value: "new" }, "+ New consignment"));
-    pick.value = po.shipment_id || "";
-    const number = h("input", { placeholder: "Consignment number", autocapitalize: "characters" });
-    const arrival = h("input", { type: "date", value: new Date().toISOString().slice(0, 10) });
-    const agent = h("input", { placeholder: "Clearing agent" });
-    const debit = h("input", { placeholder: "Agent's debit note" });
-    const duty = h("input", { type: "number", inputmode: "decimal", step: "0.01", placeholder: "Duty (all of it)" });
-    const freight = h("input", { type: "number", inputmode: "decimal", step: "0.01", placeholder: "Freight (all of it)" });
-    const fresh = h("div", { class: "stack" }, number, h("label", {}, "Arrived"), arrival, agent, debit, h("div", { class: "row" }, duty, freight));
-    const taken = h("div", { class: "err" });
-    const show = () => {
-      fresh.style.display = pick.value === "new" ? "" : "none";
-      const n = number.value.trim().toUpperCase();
-      taken.textContent = pick.value === "new" && n && choices.some((c) => c.number.toUpperCase() === n) ? "Already used: pick it above instead" : "";
-    };
-    pick.addEventListener("change", show); number.addEventListener("input", show); show();
     const sheet = sheetWith("Receive " + po.number,
-      h("b", {}, "The consignment it came in"),
-      h("p", { class: "muted small" }, "Required: its duty and freight go into the stock's cost before prices are set. They are shared over the lines by value."),
-      pick, fresh, taken,
+      h("b", {}, "Consignment " + po.shipment),
+      h("p", { class: "muted small" }, "What arrived, at what cost. Its consignment's duty and freight are shared over the lines by value. A shop PC raises it for approval."),
       ...rows.map(([l, qty, cost]) => h("div", { class: "card" }, h("b", {}, l.name), h("div", { class: "row" },
         h("div", { class: "grow" }, h("label", {}, "Qty"), qty), h("div", { class: "grow" }, h("label", {}, "Unit cost"), cost)))),
       h("button", { class: "gold full", onclick: async () => {
         const lines = rows.map(([l, qty, cost]) => ({ line_id: l.id, qty: Number(qty.value), unit_cost: Number(cost.value), duty: 0, freight: 0 }));
-        const payload = { po_id: po.id, lines };
-        if (pick.value === "new") {
-          const n = number.value.trim().toUpperCase();
-          if (!n) { toast("Give the new consignment its number"); return; }
-          try {
-            if (await api("rpl_mobile_consignment_taken", { p_token: session.token, p_number: n })) { toast("There is already a consignment " + n + ": pick it instead", 4000); return; }
-          } catch (e) { toast(e.message, 4000); return; }
-          payload.new_consignment = { number: n, arrival: arrival.value, agent: agent.value.trim(), debit_note: debit.value.trim(),
-            duty: Number(duty.value) || 0, freight: Number(freight.value) || 0 };
-        } else if (pick.value) {
-          payload.shipment_id = pick.value;
-        } else { toast("Pick the consignment it came in, or a new one"); return; }
-        try { await ask("receive_po", payload, "Delivery of " + po.number + " sent"); sheet.remove(); render("pos"); }
+        try { await ask("receive_po", { po_id: po.id, shipment_id: po.shipment_id, lines }, "Delivery of " + po.number + " sent"); sheet.remove(); render("pos"); }
         catch (e) { toast(e.message, 4000); }
       } }, "Send"));
   }

@@ -400,3 +400,14 @@ body.ready .rise:nth-child(5) { transition-delay: .32s; }
   .product:hover .photo img, .product:hover .placeholder { transform: none; }
   .cta:hover, .contact-actions .chip-link:hover { transform: none; }
 }
+
+/* The receipt after paying by Paynow */
+.receipt { padding: 32px 0 8px; }
+.receipt-card { max-width: 560px; margin: 0 auto; background: var(--card); border-radius: var(--radius); padding: 28px;
+  box-shadow: var(--shadow); border: 1px solid var(--line); }
+.receipt-card h2 { margin: 6px 0 4px; }
+.receipt-meta { color: var(--muted); margin: 0 0 14px; }
+.receipt-lines { list-style: none; padding: 0; margin: 0 0 12px; }
+.receipt-lines li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.receipt-total { font-weight: 700; margin: 10px 0; }
+.receipt-note { color: var(--ink-soft); }
