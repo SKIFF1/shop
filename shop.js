@@ -286,6 +286,13 @@
       foot.append(price, add);
       body.append(name);
       if (expected.textContent) body.append(expected);
+      // Wholesale, when the shop shows it: agreed with the shop when it calls to confirm.
+      if (p.wholesale && p.price != null) {
+        const wholesale = document.createElement("p");
+        wholesale.className = "wholesale";
+        wholesale.textContent = "Wholesale " + money(p.wholesale) + " · ask us";
+        body.append(wholesale);
+      }
       body.append(foot);
       if (p.featured) {
         const star = document.createElement("span");

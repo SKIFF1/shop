@@ -210,7 +210,9 @@
     if (session.role === "admin") return true;
     return session.role === "sales_person" && ["take_payments", "give_discounts", "record_expenses", "screen:Sales Order", "screen:Web Orders"].includes(key);
   }
-  const cart = { lines: [], customer: { name: "", phone: "", email: "", address: "" }, delivery: 0, discount: 0, request: null };
+  const cart = { lines: [], customer: { name: "", phone: "", email: "", address: "" }, delivery: 0, discount: 0, request: null, wholesale: false };
+  // A line's price on the basket's price list: wholesale where the product has one.
+  const priceOf = (p) => (cart.wholesale && p.wholesale ? p.wholesale : p.price);
 
   // --- Face ID / Touch ID: a passkey kept on this iPad or iPhone, asked
   // for on opening and after five minutes away, as the Android app asks
@@ -387,18 +389,30 @@
         for (const p of found) {
           results.append(h("div", { class: "item", onclick: () => { add(p); } },
             h("div", { class: "grow" }, h("div", {}, p.name), h("div", { class: "muted" }, p.sku + (p.service ? " · service" : " · " + p.qty + " available"))),
-            h("div", { class: "money" }, money(p.price)), h("button", { "aria-label": "Add " + p.name }, "+")));
+            h("div", { class: "money" }, money(priceOf(p))), h("button", { "aria-label": "Add " + p.name }, "+")));
         }
       }
       function add(p) {
         const line = cart.lines.find((l) => l.id === p.id);
-        if (line) line.qty += 1; else cart.lines.push({ id: p.id, name: p.name, sku: p.sku, price: p.price, qty: 1, max: p.service ? Infinity : p.qty });
+        if (line) line.qty += 1; else cart.lines.push({ id: p.id, name: p.name, sku: p.sku, price: priceOf(p), retail: p.price, wholesale: p.wholesale, qty: 1, max: p.service ? Infinity : p.qty });
         cart.request = null; showBasket(); toast(p.name + " added");
       }
       function showBasket() {
         basket.textContent = "";
         if (!cart.lines.length) return;
         const box = h("div", { class: "card" }, h("h2", {}, "Basket"));
+        if (can("sell_wholesale")) {
+          // Retail or wholesale prices, for those allowed to sell at wholesale.
+          const pick = h("select", { "aria-label": "Prices" },
+            h("option", { value: "retail" }, "Retail prices"), h("option", { value: "wholesale" }, "Wholesale prices"));
+          pick.value = cart.wholesale ? "wholesale" : "retail";
+          pick.addEventListener("change", () => {
+            cart.wholesale = pick.value === "wholesale";
+            for (const l of cart.lines) l.price = priceOf({ price: l.retail, wholesale: l.wholesale });
+            cart.request = null; showBasket(); showResults();
+          });
+          box.append(pick);
+        }
         for (const l of cart.lines) {
           box.append(h("div", { class: "item row" },
             h("div", { class: "grow" }, h("div", {}, l.name), h("div", { class: "muted" }, money(l.price) + " each")),
@@ -432,7 +446,7 @@
       async function place(how) {
         cart.request = cart.request || uuid();
         const args = { p_token: session.token, p_branch: branch, p_lines: cart.lines.map((l) => ({ item_id: l.id, qty: l.qty, unit_price: l.price })),
-          p_customer: cart.customer, p_delivery: cart.delivery || 0, p_request_id: cart.request };
+          p_customer: { ...cart.customer, price_list: cart.wholesale ? "wholesale" : "retail" }, p_delivery: cart.delivery || 0, p_request_id: cart.request };
         try {
           if (how === "quote") {
             const r = await api("rpl_mobile_create_quote", { ...args, p_discount: 0 });
@@ -447,7 +461,8 @@
             }
           }
           cart.lines = []; cart.customer = { name: "", phone: "", email: "", address: "" }; cart.delivery = 0; cart.request = null;
-          showBasket();
+          cart.wholesale = false;
+          showBasket(); showResults();
         } catch (e) { toast(e.maybeDone ? e.message + " (check Orders before trying again)" : e.message, 4000); }
       }
       search.addEventListener("input", showResults);
